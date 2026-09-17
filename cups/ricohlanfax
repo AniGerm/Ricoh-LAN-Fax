@@ -1,0 +1,19 @@
+#!/usr/bin/python3 -u
+"""CUPS backend entry (installed to /usr/lib/cups/backend/ricohlanfax)."""
+import sys
+from pathlib import Path
+
+CANDIDATES = [
+    Path(__file__).resolve().parent.parent,  # repo checkout: cups/ricohlanfax
+    Path("/usr/local/share/ricoh-lanfax"),
+]
+for folder in CANDIDATES:
+    if (folder / "ricoh_lanfax" / "cups_backend.py").exists():
+        sys.path.insert(0, str(folder))
+        break
+try:
+    from ricoh_lanfax.cups_backend import run_backend
+except Exception as exc:
+    sys.stderr.write(f"ERROR: ricoh_lanfax import failed: {exc}\n")
+    raise SystemExit(1)
+raise SystemExit(run_backend(sys.argv))

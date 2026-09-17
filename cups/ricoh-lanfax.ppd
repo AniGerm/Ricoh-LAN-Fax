@@ -1,0 +1,40 @@
+*PPD-Adobe: "4.3"
+*FormatVersion: "4.3"
+*FileVersion: "1.0"
+*LanguageVersion: English
+*LanguageEncoding: ISOLatin1
+*PCFileName: "LANFAX.PPD"
+*Manufacturer: "Ricoh"
+*Product: "(LAN-Fax Generic Linux)"
+*ModelName: "Ricoh LAN-Fax (Linux)"
+*ShortNickName: "Ricoh LAN-Fax"
+*NickName: "Ricoh LAN-Fax Generic (Linux Popup)"
+*PSVersion: "(3010) 0"
+*LanguageLevel: "3"
+*ColorDevice: False
+*DefaultColorSpace: Gray
+*FileSystem: False
+*Throughput: "1"
+*LandscapeOrientation: Plus90
+*TTRasterizer: Type42
+*cupsVersion: 1.4
+*cupsManualCopies: True
+*cupsModelNumber: 0
+*cupsFilter: "application/vnd.cups-pdf 0 -"
+*cupsFilter: "application/pdf 0 -"
+*OpenUI *PageSize/Media Size: PickOne
+*DefaultPageSize: A4
+*PageSize A4/A4: "<</PageSize[595.27 841.88]/ImagingBBox null>>setpagedevice"
+*PageSize Letter/Letter: "<</PageSize[612 792]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageSize
+*OpenUI *PageRegion: PickOne
+*DefaultPageRegion: A4
+*PageRegion A4/A4: "<</PageSize[595.27 841.88]/ImagingBBox null>>setpagedevice"
+*PageRegion Letter/Letter: "<</PageSize[612 792]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageRegion
+*DefaultImageableArea: A4
+*ImageableArea A4: "0 0 595.27 841.88"
+*ImageableArea Letter: "0 0 612 792"
+*DefaultPaperDimension: A4
+*PaperDimension A4: "595.27 841.88"
+*PaperDimension Letter: "612 792"

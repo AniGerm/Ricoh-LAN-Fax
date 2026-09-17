@@ -1,0 +1,33 @@
+# Local captures, previews, and user data — never publish
+captures/
+preview/
+*.raw
+*.pcap
+*.pjl.txt
+config.json
+phonebook.json
+
+# Windows driver kit (copyrighted) and installer leftovers
+DISK1/
+driver_web_installer/
+misc/
+wording/
+*.dll
+*.exe
+RV_SETUP.*
+common.xrc
+License.txt
+README.html
+README-LANFAX.md
+
+# Python / editor
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.cursor/
+.idea/
+.vscode/
+*.swp
+.DS_Store
