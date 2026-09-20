@@ -133,5 +133,30 @@ class SendTests(unittest.TestCase):
         self.assertNotIn(b"223344", ps)
 
 
+class DumpTests(unittest.TestCase):
+    def test_dump_only_when_dir_set_and_is_private(self) -> None:
+        from unittest.mock import patch
+
+        from ricoh_lanfax.send import send_document, write_debug_dump
+
+        pages = [(10, b"\x00" * 20)]
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "doc.pdf"
+            src.write_bytes(b"%PDF")
+            dump = Path(tmp) / "captures"
+            with (
+                patch("ricoh_lanfax.send.raster_to_g4_pages", return_value=pages),
+                patch("ricoh_lanfax.send.send_raw", return_value=None),
+            ):
+                send_document(src, ["111"], "127.0.0.1", dump_dir=None)
+                self.assertFalse(dump.exists())
+                send_document(src, ["111"], "127.0.0.1", dump_dir=dump)
+            raw = dump / "linux-last.raw"
+            self.assertTrue(raw.exists())
+            self.assertEqual(raw.stat().st_mode & 0o777, 0o600)
+            write_debug_dump(dump / "other.raw", b"abc")
+            self.assertEqual((dump / "other.raw").stat().st_mode & 0o777, 0o600)
+
+
 if __name__ == "__main__":
     unittest.main()

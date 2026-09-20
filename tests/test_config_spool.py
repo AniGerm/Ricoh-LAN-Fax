@@ -64,6 +64,14 @@ class SettingsTests(unittest.TestCase):
                 self.assertTrue(loaded.cover_show_info)
                 self.assertEqual(loaded.cover_message, "Bitte zurückrufen.")
                 self.assertEqual(loaded.preview_zoom, "fit")
+                self.assertFalse(loaded.save_debug_dump)
+                save_settings(
+                    Settings(
+                        printer_host="printer.example.test",
+                        save_debug_dump=True,
+                    )
+                )
+                self.assertTrue(load_settings().save_debug_dump)
             finally:
                 cfg.config_path = old
 

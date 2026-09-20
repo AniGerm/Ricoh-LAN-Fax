@@ -56,7 +56,7 @@ def _run(argv: list[str]) -> int:
         return 1
 
     job_id, user, title = argv[1], argv[2], argv[3]
-    _err(f"INFO: job={job_id} user={user} title={title!r} argc={len(argv)}")
+    _err(f"INFO: job={job_id} argc={len(argv)}")
 
     if os.geteuid() == 0:
         purge_stale_jobs()
@@ -80,7 +80,7 @@ def _run(argv: list[str]) -> int:
         {
             "job_id": job_id,
             "user": user,
-            "title": argv[3] or "Dokument",
+            "title": title or "Dokument",
             "document": str(paths["doc"]),
             "copies": argv[4] if len(argv) > 4 else "1",
             "bytes": len(data),

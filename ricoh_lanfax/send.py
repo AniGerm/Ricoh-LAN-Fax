@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import getpass
+import logging
+import os
 import socket
 import struct
 import shutil
@@ -20,6 +22,7 @@ RFAX_LANGUAGE = "RFAX"
 FAX_WIDTH_PX = 1728
 FAX_HEIGHT_PX = 2259
 CUPS_TESTPAGE = Path("/usr/share/cups/data/default-testpage.pdf")
+log = logging.getLogger(__name__)
 
 
 def _ascii(text: str) -> bytes:
@@ -356,6 +359,15 @@ def probe_printer(host: str, port: int = 9100, timeout: float = 3.0) -> str:
     return f"{host.strip()}:{port} erreichbar"
 
 
+def write_debug_dump(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def send_document(
     source: Path,
     numbers: list[str],
@@ -385,9 +397,8 @@ def send_document(
         last = job
         send_raw(host.strip(), port, job)
         notes.append(f"{number} ({len(job)} B)")
-    if dump_dir is not None:
-        dump_dir.mkdir(parents=True, exist_ok=True)
-        (dump_dir / "linux-last.raw").write_bytes(last)
+    if dump_dir is not None and last:
+        write_debug_dump(dump_dir / "linux-last.raw", last)
     extra = " inkl. Deckblatt" if cover is not None else ""
     return f"{len(doc_pages) + (1 if cover is not None else 0)} Seite(n){extra} → {host.strip()}:{port}: " + ", ".join(notes)
 

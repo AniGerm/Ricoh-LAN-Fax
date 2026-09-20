@@ -156,8 +156,16 @@ class SettingsDialog:
         self.port.insert(0, str(settings.printer_port))
         self.status = ttk.Label(frm, text="", style="Muted.TLabel")
         self.status.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.save_dump = tk.BooleanVar(master=win, value=bool(settings.save_debug_dump))
+        ttk.Checkbutton(
+            frm,
+            text="Debug-Dump der letzten Übertragung speichern (0600)",
+            variable=self.save_dump,
+            onvalue=True,
+            offvalue=False,
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         btns = ttk.Frame(frm)
-        btns.grid(row=4, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        btns.grid(row=5, column=0, columnspan=3, sticky="e", pady=(12, 0))
         button(btns, text="Verbindung prüfen", command=self.test).pack(side="left", padx=(0, 8))
         button(btns, text="Abbrechen", command=win.destroy).pack(side="left", padx=4)
         button(btns, text="Speichern", command=self.save, variant="primary").pack(side="left", padx=4)
@@ -173,6 +181,7 @@ class SettingsDialog:
         current = load_settings()
         current.printer_host = host
         current.printer_port = port
+        current.save_debug_dump = bool(self.save_dump.get())
         return current
 
     def test(self) -> None:
@@ -1044,7 +1053,7 @@ class FaxPopup:
         document = self.document
         self.win.update_idletasks()
         cover = self._cover_spec(numbers)
-        dump = self.project / "captures"
+        dump = (self.project / "captures") if settings.save_debug_dump else None
 
         def work() -> None:
             try:
@@ -1058,8 +1067,10 @@ class FaxPopup:
                         last = job
                         send_raw(settings.printer_host.strip(), settings.printer_port, job)
                         notes.append(note)
-                    dump.mkdir(parents=True, exist_ok=True)
-                    (dump / "linux-last.raw").write_bytes(last)
+                    if dump is not None and last:
+                        from .send import write_debug_dump
+
+                        write_debug_dump(dump / "linux-last.raw", last)
                     note = "; ".join(notes)
                 else:
                     note = send_document(

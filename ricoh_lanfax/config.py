@@ -34,6 +34,7 @@ class Settings:
     cover_show_info: bool = True
     cover_message: str = ""
     preview_zoom: str = "fit"
+    save_debug_dump: bool = False
 
     def display_target(self) -> str:
         host = self.printer_host.strip() or "(keine IP)"
@@ -65,6 +66,7 @@ def load_settings() -> Settings:
         cover_show_info=_as_bool(data.get("cover_show_info"), True),
         cover_message=str(data.get("cover_message") or ""),
         preview_zoom=str(data.get("preview_zoom") or "fit"),
+        save_debug_dump=_as_bool(data.get("save_debug_dump"), False),
     )
 
 
