@@ -75,5 +75,56 @@ class SinkTests(unittest.TestCase):
             self.assertGreater(pcaps[0].stat().st_size, 24)
 
 
+class SendRawTests(unittest.TestCase):
+    def test_send_raw_against_job_server(self) -> None:
+        from ricoh_lanfax.send import send_raw
+
+        job = UEL + b"@PJL ENTER LANGUAGE=RFAX\r\nII*\x00" + UEL
+        with tempfile.TemporaryDirectory() as tmp:
+            logs: list[str] = []
+            srv = JobServer("127.0.0.1", 0, Path(tmp), logs.append, idle_timeout=0.4)
+            srv.start()
+            self.assertTrue(srv.ready.wait(2), msg="\n".join(logs))
+            port = srv.bound_port
+            assert port is not None
+            reply = send_raw("127.0.0.1", port, job, timeout=5.0)
+            self.assertEqual(reply, b"")
+            deadline = time.time() + 3
+            raws: list[Path] = []
+            while time.time() < deadline:
+                raws = list(Path(tmp).glob("*.raw"))
+                if raws:
+                    break
+                time.sleep(0.05)
+            srv.stop()
+            srv.join(timeout=2.0)
+            self.assertTrue(raws, msg="\n".join(logs))
+            self.assertEqual(raws[0].read_bytes(), job)
+
+    def test_send_raw_returns_reply_then_eof(self) -> None:
+        from ricoh_lanfax.send import send_raw
+
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def serve() -> None:
+            conn, _ = server.accept()
+            try:
+                conn.recv(65536)
+                conn.sendall(b"ACK-FROM-DEVICE")
+            finally:
+                conn.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        try:
+            reply = send_raw("127.0.0.1", port, b"job-bytes", timeout=5.0)
+        finally:
+            server.close()
+        self.assertEqual(reply, b"ACK-FROM-DEVICE")
+
+
 if __name__ == "__main__":
     unittest.main()

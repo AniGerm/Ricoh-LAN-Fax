@@ -368,6 +368,21 @@ def write_debug_dump(path: Path, data: bytes) -> None:
         pass
 
 
+class PartialSendError(RuntimeError):
+    """Some destinations were handed to the device, others failed."""
+
+    def __init__(self, results: list[tuple[str, bool, str]]) -> None:
+        self.results = results
+        delivered = [number for number, ok, _err in results if ok]
+        failed = [f"{number}: {err}" for number, ok, err in results if not ok]
+        parts: list[str] = []
+        if delivered:
+            parts.append("übergeben: " + ", ".join(delivered))
+        if failed:
+            parts.append("fehlgeschlagen: " + "; ".join(failed))
+        super().__init__("Teilfehler — " + " | ".join(parts))
+
+
 def send_document(
     source: Path,
     numbers: list[str],
@@ -382,31 +397,62 @@ def send_document(
     if not host.strip():
         raise RuntimeError("Keine Drucker-IP — Zahnrad öffnen und IP eintragen")
     doc_pages = raster_to_g4_pages(source)
-    notes: list[str] = []
+    results: list[tuple[str, bool, str]] = []
     last = b""
     for number in numbers:
-        pages = list(doc_pages)
-        if cover is not None:
-            from .cover import CoverSpec, raster_cover_g4
+        try:
+            pages = list(doc_pages)
+            if cover is not None:
+                from .cover import CoverSpec, raster_cover_g4
 
-            spec = cover
-            if isinstance(spec, CoverSpec):
-                spec = replace(spec.stamp(), numbers=[number], document_pages=len(doc_pages))
-                pages = [raster_cover_g4(spec), *doc_pages]
-        job = wrap_pages(pages, number)
-        last = job
-        send_raw(host.strip(), port, job)
-        notes.append(f"{number} ({len(job)} B)")
+                spec = cover
+                if isinstance(spec, CoverSpec):
+                    spec = replace(spec.stamp(), numbers=[number], document_pages=len(doc_pages))
+                    pages = [raster_cover_g4(spec), *doc_pages]
+            job = wrap_pages(pages, number)
+            last = job
+            send_raw(host.strip(), port, job)
+            results.append((number, True, ""))
+        except Exception as exc:  # noqa: BLE001 — continue remaining numbers
+            results.append((number, False, str(exc)))
     if dump_dir is not None and last:
         write_debug_dump(dump_dir / "linux-last.raw", last)
     extra = " inkl. Deckblatt" if cover is not None else ""
-    return f"{len(doc_pages) + (1 if cover is not None else 0)} Seite(n){extra} → {host.strip()}:{port}: " + ", ".join(notes)
+    if any(not ok for _number, ok, _err in results):
+        raise PartialSendError(results)
+    return (
+        f"{len(doc_pages) + (1 if cover is not None else 0)} Seite(n){extra} "
+        f"→ {host.strip()}:{port}: An Gerät übergeben"
+    )
 
 
-def send_raw(host: str, port: int, data: bytes, timeout: float = 30.0) -> None:
+REPLY_WAIT = 10.0
+
+
+def send_raw(host: str, port: int, data: bytes, timeout: float = 30.0) -> bytes:
     with socket.create_connection((host, port), timeout=timeout) as sock:
         sock.sendall(data)
         try:
             sock.shutdown(socket.SHUT_WR)
         except OSError:
             pass
+        sock.settimeout(REPLY_WAIT)
+        chunks: list[bytes] = []
+        try:
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        except (TimeoutError, socket.timeout):
+            if not chunks:
+                log.warning("send_raw: timeout waiting for reply")
+        except (ConnectionResetError, BrokenPipeError) as exc:
+            if not chunks:
+                log.warning("send_raw: %s without reply", type(exc).__name__)
+        except OSError as exc:
+            if not chunks:
+                log.warning("send_raw: %s without reply", exc)
+        reply = b"".join(chunks)
+        log.debug("send_raw reply %d B hex=%s", len(reply), reply[:32].hex())
+        return reply

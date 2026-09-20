@@ -157,6 +157,34 @@ class DumpTests(unittest.TestCase):
             write_debug_dump(dump / "other.raw", b"abc")
             self.assertEqual((dump / "other.raw").stat().st_mode & 0o777, 0o600)
 
+    def test_partial_send_continues_remaining_numbers(self) -> None:
+        from unittest.mock import patch
+
+        from ricoh_lanfax.send import PartialSendError, send_document
+
+        def fake_raw(_host: str, _port: int, data: bytes, timeout: float = 30.0) -> bytes:
+            _ = timeout
+            if b"222" in data:
+                raise OSError("connection reset")
+            return b""
+
+        pages = [(10, b"\x00" * 20)]
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "doc.pdf"
+            src.write_bytes(b"%PDF")
+            with (
+                patch("ricoh_lanfax.send.raster_to_g4_pages", return_value=pages),
+                patch("ricoh_lanfax.send.send_raw", side_effect=fake_raw),
+            ):
+                with self.assertRaises(PartialSendError) as ctx:
+                    send_document(src, ["111", "222", "333"], "127.0.0.1")
+        results = ctx.exception.results
+        self.assertEqual(
+            [(number, ok) for number, ok, _err in results],
+            [("111", True), ("222", False), ("333", True)],
+        )
+        self.assertIn("connection reset", results[1][2])
+
 
 if __name__ == "__main__":
     unittest.main()

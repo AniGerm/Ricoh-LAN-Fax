@@ -1056,22 +1056,28 @@ class FaxPopup:
         dump = (self.project / "captures") if settings.save_debug_dump else None
 
         def work() -> None:
-            try:
-                from .send import build_job, send_document, send_raw
+            from .send import PartialSendError, build_job, send_document, send_raw, write_debug_dump
 
+            try:
                 if document.suffix.lower() == ".raw":
-                    notes = []
+                    results: list[tuple[str, bool, str]] = []
                     last = b""
                     for number in numbers:
-                        job, note = build_job(None, number, template=document)
-                        last = job
-                        send_raw(settings.printer_host.strip(), settings.printer_port, job)
-                        notes.append(note)
+                        try:
+                            job, _note = build_job(None, number, template=document)
+                            last = job
+                            send_raw(settings.printer_host.strip(), settings.printer_port, job)
+                            results.append((number, True, ""))
+                        except Exception as exc:  # noqa: BLE001
+                            results.append((number, False, str(exc)))
                     if dump is not None and last:
-                        from .send import write_debug_dump
-
                         write_debug_dump(dump / "linux-last.raw", last)
-                    note = "; ".join(notes)
+                    if any(not ok for _n, ok, _e in results):
+                        raise PartialSendError(results)
+                    note = (
+                        f"{len(numbers)} Empfänger → {settings.printer_host.strip()}:"
+                        f"{settings.printer_port}: An Gerät übergeben"
+                    )
                 else:
                     note = send_document(
                         document,
@@ -1082,6 +1088,8 @@ class FaxPopup:
                         cover=cover,
                     )
                 self.win.after(0, lambda: self._ok(note))
+            except PartialSendError as exc:
+                self.win.after(0, lambda e=exc: self._partial_fail(e))
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 self.win.after(0, lambda m=msg: self._fail(m))
@@ -1093,6 +1101,21 @@ class FaxPopup:
         if self.on_done:
             self.on_done("ok", note)
         self.win.destroy()
+
+    def _partial_fail(self, exc: object) -> None:
+        results = getattr(exc, "results", [])
+        delivered = [number for number, ok, _err in results if ok]
+        failed = [(number, err) for number, ok, err in results if not ok]
+        for number in delivered:
+            self._remove_recipient(number)
+        ok_txt = ", ".join(delivered) if delivered else "keine"
+        fail_txt = ", ".join(f"{number} ({err})" for number, err in failed)
+        message = (
+            f"Teilweise an das Gerät übergeben.\n"
+            f"Übergeben: {ok_txt}\n"
+            f"Nicht übergeben: {fail_txt}"
+        )
+        self._fail(message)
 
     def _fail(self, message: str) -> None:
         self._sending = False
