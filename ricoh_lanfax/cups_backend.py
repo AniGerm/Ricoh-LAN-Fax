@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 import traceback
 from pathlib import Path
 
 from .session import apply_session_env, drop_privs
-from .spool import append_log, job_paths, write_json
+from .spool import (
+    append_log,
+    job_paths,
+    purge_stale_jobs,
+    restrict_job_files,
+    unlink_job_files,
+    write_json,
+)
 
 DEVICE_LINE = 'direct ricohlanfax:/ "Ricoh LAN-Fax" "Ricoh LAN-Fax (number popup)"\n'
 
@@ -50,17 +58,20 @@ def _run(argv: list[str]) -> int:
     job_id, user, title = argv[1], argv[2], argv[3]
     _err(f"INFO: job={job_id} user={user} title={title!r} argc={len(argv)}")
 
+    if os.geteuid() == 0:
+        purge_stale_jobs()
+
     data = _read_job_bytes(argv)
-    _err(f"INFO: gelesen {len(data)} bytes")
+    _err(f"INFO: job={job_id} bytes={len(data)}")
     if not data:
-        _err("ERROR: leerer Druckauftrag (kein PDF auf stdin)")
+        _err(f"ERROR: job={job_id} status=empty")
         return 1
 
     from .send import is_cups_banner, materialize_document
 
     if is_cups_banner(data):
         data = materialize_document(data)
-        _err(f"INFO: CUPS-Testseite -> {len(data)} bytes PDF/PS")
+        _err(f"INFO: job={job_id} bytes={len(data)} (test page)")
 
     paths = job_paths(job_id)
     paths["doc"].write_bytes(data)
@@ -69,26 +80,26 @@ def _run(argv: list[str]) -> int:
         {
             "job_id": job_id,
             "user": user,
-            "title": title or "Dokument",
+            "title": argv[3] or "Dokument",
             "document": str(paths["doc"]),
             "copies": argv[4] if len(argv) > 4 else "1",
             "bytes": len(data),
             "ts": time.time(),
         },
     )
-    for p in (paths["doc"], paths["json"]):
-        try:
-            p.chmod(0o666)
-        except OSError:
-            pass
-    _err(f"INFO: Spool {paths['json']}")
+    try:
+        restrict_job_files(user, paths["doc"], paths["json"])
+    except Exception as exc:  # noqa: BLE001
+        _err(f"ERROR: job={job_id} status=abort {exc}")
+        unlink_job_files(paths)
+        return 1
 
     try:
         drop_privs(user)
     except Exception as exc:  # noqa: BLE001
         _err(f"INFO: drop_privs: {exc}")
     env = apply_session_env(user)
-    _err(f"INFO: uid={__import__('os').geteuid()} DISPLAY={env.get('DISPLAY')!r}")
+    _err(f"INFO: uid={os.geteuid()} DISPLAY={env.get('DISPLAY')!r}")
 
     if paths["result"].exists():
         try:
@@ -98,20 +109,23 @@ def _run(argv: list[str]) -> int:
 
     from .popup import run_fax_popup
 
-    _err("INFO: öffne Drucker-Popup")
+    _err(f"INFO: job={job_id} popup")
     try:
-        status = run_fax_popup(paths["json"])
-    except Exception as exc:  # noqa: BLE001
-        _err(f"ERROR: Popup: {exc}")
-        append_log(traceback.format_exc())
-        return 1
+        try:
+            status = run_fax_popup(paths["json"])
+        except Exception as exc:  # noqa: BLE001
+            _err(f"ERROR: job={job_id} status=popup {exc}")
+            append_log(traceback.format_exc())
+            return 1
 
-    _err(f"INFO: Popup-Ergebnis {status}")
-    if status == "ok":
-        return 0
-    if status == "cancel":
-        return 5
-    return 1
+        _err(f"INFO: job={job_id} status={status} bytes={len(data)}")
+        if status == "ok":
+            return 0
+        if status == "cancel":
+            return 5
+        return 1
+    finally:
+        unlink_job_files(paths)
 
 
 if __name__ == "__main__":

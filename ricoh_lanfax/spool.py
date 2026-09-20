@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import time
 from pathlib import Path
 from typing import Any
 
 SHARED_SPOOL = Path("/var/tmp/ricoh-lanfax/spool")
 SHARED_LOG = Path("/var/tmp/ricoh-lanfax/backend.log")
+STALE_SECONDS = 24 * 3600
 
 
 def spool_dir(home: Path | None = None) -> Path:
@@ -40,10 +42,19 @@ def job_paths(job_id: str, home: Path | None = None) -> dict[str, Path]:
     }
 
 
+def _chmod_private(path: Path) -> None:
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def write_json(path: Path, data: dict[str, Any]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    _chmod_private(tmp)
     tmp.replace(path)
+    _chmod_private(path)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -69,6 +80,39 @@ def pending_jobs(home: Path | None = None) -> list[dict[str, Any]]:
 def write_result(job_id: str, status: str, message: str = "", home: Path | None = None) -> None:
     paths = job_paths(job_id, home)
     write_json(paths["result"], {"status": status, "message": message, "ts": time.time()})
+
+
+def restrict_job_files(user: str, *paths: Path) -> None:
+    """chown to the printing user and chmod 0600. Abort if the user is unknown."""
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError as exc:
+        raise RuntimeError(f"Unbekannter User: {user}") from exc
+    for path in paths:
+        if not path.exists():
+            continue
+        if os.geteuid() == 0:
+            os.chown(path, pw.pw_uid, pw.pw_gid)
+        os.chmod(path, 0o600)
+
+
+def unlink_job_files(paths: dict[str, Path]) -> None:
+    for path in paths.values():
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            append_log(f"INFO: cleanup {path.name}: {exc}")
+
+
+def purge_stale_jobs(home: Path | None = None, max_age: float = STALE_SECONDS) -> None:
+    root = spool_dir(home)
+    now = time.time()
+    for path in root.glob("job-*"):
+        try:
+            if now - path.stat().st_mtime > max_age:
+                path.unlink()
+        except OSError as exc:
+            append_log(f"INFO: stale {path.name}: {exc}")
 
 
 def append_log(message: str) -> None:
