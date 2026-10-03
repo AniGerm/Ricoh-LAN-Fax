@@ -1,4 +1,4 @@
-"""Fax address book: local JSON now, LDAP / vCard sources later."""
+"""Fax address book: local JSON plus LDAP / vCard (NovaMail-compatible)."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from .config import NUMBER_CHARS, config_path, load_settings, parse_numbers
 
 RECENT_LIMIT = 50
 SEARCH_FLOOR = 0.42
+MODE_LOCAL = "local"
+MODE_DIRECTORY = "directory"
 
 _UMLAUT = str.maketrans(
     {
@@ -105,88 +107,68 @@ class AddressBookSource(Protocol):
         ...
 
 
-@dataclass
-class LdapSource:
-    """Read-only LDAP hook. Enable via phonebook.json → sources.ldap.
-
-    Later: bind (ldap3), search base_dn, map name_attr and number_attrs.
-    """
-
-    source_id: str = "ldap"
-    label: str = "LDAP"
-    writable: bool = False
-    enabled: bool = False
-    url: str = ""
-    bind_dn: str = ""
-    base_dn: str = ""
-    filter: str = "(|(facsimileTelephoneNumber=*)(telephoneNumber=*))"
-    name_attr: str = "cn"
-    number_attrs: list[str] = field(default_factory=lambda: ["facsimileTelephoneNumber", "telephoneNumber"])
-
-    def list_contacts(self) -> list[Contact]:
-        return []
-
-    def search(self, query: str) -> list[Contact]:
-        del query
-        return self.list_contacts()
-
-
-@dataclass
-class VcardSource:
-    """Read-only vCard hook. Enable via phonebook.json → sources.vcard.path."""
-
-    source_id: str = "vcard"
-    label: str = "vCard"
-    writable: bool = False
-    enabled: bool = False
-    path: str = ""
-
-    def list_contacts(self) -> list[Contact]:
-        return []
-
-    def search(self, query: str) -> list[Contact]:
-        del query
-        return self.list_contacts()
-
-
 DEFAULT_SOURCES: dict[str, Any] = {
+    "mode": MODE_LOCAL,
     "ldap": {
         "enabled": False,
         "url": "",
         "bind_dn": "",
+        "bind_password": "",
         "base_dn": "",
-        "filter": "(|(facsimileTelephoneNumber=*)(telephoneNumber=*))",
+        "filter": "(objectClass=inetOrgPerson)",
         "name_attr": "cn",
-        "number_attrs": ["facsimileTelephoneNumber", "telephoneNumber"],
+        "number_attrs": ["facsimileTelephoneNumber", "telephoneNumber", "fax", "mobile"],
+        "preset": "",
     },
     "vcard": {
         "enabled": False,
         "path": "",
+        "username": "",
+        "password": "",
     },
 }
 
 
+def addressbook_mode(config: dict[str, Any] | None = None) -> str:
+    cfg = config if isinstance(config, dict) else DEFAULT_SOURCES
+    mode = str(cfg.get("mode") or MODE_LOCAL).strip().lower()
+    if mode in {MODE_DIRECTORY, "ldap", "vcard", "novamail", "remote"}:
+        return MODE_DIRECTORY
+    return MODE_LOCAL
+
+
 def build_extra_sources(config: dict[str, Any]) -> list[AddressBookSource]:
+    from .directory import LdapSource, VcardSource
+
+    mode = addressbook_mode(config)
+    directory_on = mode == MODE_DIRECTORY
     extra: list[AddressBookSource] = []
     ldap_cfg = dict(DEFAULT_SOURCES["ldap"])
     ldap_cfg.update(config.get("ldap") or {})
+    ldap_enabled = directory_on and bool(ldap_cfg.get("enabled"))
     extra.append(
         LdapSource(
-            enabled=bool(ldap_cfg.get("enabled")),
+            enabled=ldap_enabled,
             url=str(ldap_cfg.get("url") or ""),
             bind_dn=str(ldap_cfg.get("bind_dn") or ""),
+            bind_password=str(ldap_cfg.get("bind_password") or ""),
             base_dn=str(ldap_cfg.get("base_dn") or ""),
             filter=str(ldap_cfg.get("filter") or DEFAULT_SOURCES["ldap"]["filter"]),
             name_attr=str(ldap_cfg.get("name_attr") or "cn"),
-            number_attrs=[str(a) for a in (ldap_cfg.get("number_attrs") or DEFAULT_SOURCES["ldap"]["number_attrs"])],
+            number_attrs=[
+                str(a) for a in (ldap_cfg.get("number_attrs") or DEFAULT_SOURCES["ldap"]["number_attrs"])
+            ],
         )
     )
     vcard_cfg = dict(DEFAULT_SOURCES["vcard"])
     vcard_cfg.update(config.get("vcard") or {})
+    vcard_enabled = directory_on and bool(vcard_cfg.get("enabled"))
     extra.append(
         VcardSource(
-            enabled=bool(vcard_cfg.get("enabled")),
+            enabled=vcard_enabled,
             path=str(vcard_cfg.get("path") or ""),
+            username=str(vcard_cfg.get("username") or ""),
+            password=str(vcard_cfg.get("password") or ""),
         )
     )
     return extra
@@ -233,7 +215,13 @@ class AddressBook:
     sources_config: dict[str, Any] = field(default_factory=lambda: json.loads(json.dumps(DEFAULT_SOURCES)))
     extra_sources: list[AddressBookSource] = field(default_factory=list)
 
+    def mode(self) -> str:
+        return addressbook_mode(self.sources_config)
+
     def directory(self) -> list[Contact]:
+        # Local mode: only local contacts. Directory mode: LDAP/vCard (+ keep local favorites).
+        if self.mode() == MODE_LOCAL:
+            return list(self.contacts)
         found: list[Contact] = list(self.contacts)
         seen = {c.compact() for c in found}
         for src in self.extra_sources:
@@ -367,14 +355,28 @@ class AddressBook:
         return len(self.contacts) < before
 
     def source_notes(self) -> list[str]:
+        from .directory import LdapSource, VcardSource
+
         notes: list[str] = []
+        if self.mode() == MODE_LOCAL:
+            notes.append("Lokales Adressbuch aktiv.")
+            return notes
+        notes.append("Verzeichnismodus (LDAP/vCard / NovaMail) aktiv.")
+        any_enabled = False
         for src in self.extra_sources:
             if not getattr(src, "enabled", False):
                 continue
-            if isinstance(src, LdapSource) and not src.list_contacts():
-                notes.append("LDAP ist vorbereitet, aber noch nicht verbunden.")
-            if isinstance(src, VcardSource) and not src.list_contacts():
-                notes.append("vCard-Quelle ist aktiviert, Datei wird später gelesen.")
+            any_enabled = True
+            rows = src.list_contacts()
+            err = getattr(src, "last_error", lambda: "")()
+            if err:
+                notes.append(f"{src.label}: Fehler — {err}")
+            else:
+                notes.append(f"{src.label}: {len(rows)} Einträge")
+            if isinstance(src, (LdapSource, VcardSource)):
+                pass
+        if not any_enabled:
+            notes.append("Kein LDAP/vCard aktiv — in den Einstellungen NovaMail/LDAP konfigurieren.")
         return notes
 
 
@@ -409,11 +411,23 @@ def _merge_source_config(raw: object) -> dict[str, Any]:
     merged = json.loads(json.dumps(DEFAULT_SOURCES))
     if not isinstance(raw, dict):
         return merged
+    if "mode" in raw:
+        merged["mode"] = addressbook_mode({"mode": raw.get("mode")})
     for key in ("ldap", "vcard"):
         extra = raw.get(key)
         if isinstance(extra, dict):
             merged[key].update(extra)
     return merged
+
+
+def save_sources_config(sources: dict[str, Any], path: Path | None = None) -> AddressBook:
+    """Update only the sources section of phonebook.json and reload."""
+    book = load_book(path)
+    book.sources_config = _merge_source_config(sources)
+    book.extra_sources = build_extra_sources(book.sources_config)
+    save_book(book, path)
+    return book
+
 
 
 def empty_book() -> AddressBook:

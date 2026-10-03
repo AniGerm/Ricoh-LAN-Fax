@@ -7,8 +7,9 @@ This is not an official Ricoh product. Do not publish captures, phone numbers, o
 ## Features
 
 - CUPS printer **Ricoh-LAN-Fax** with a number dialog (no extra app has to stay open)
-- Cover page, preview, zoom, and a local address book (favorites, recents, search)
-- Ubuntu app-menu entry **Ricoh LAN-Fax** to set the device IP/port and manage the phonebook without printing
+- Cover page, preview, zoom, and address book (local **or** LDAP/vCard)
+- **NovaMail**-compatible directory: LDAP `ldap://host:1389` / CardDAV `http://host:8765/addressbooks/novamail/`
+- Ubuntu app-menu entry **Ricoh LAN-Fax** for device IP and address-book source
 - Production install / `.deb` ships the printer path only — **no** Windows capture sink app
 
 ## Dependencies
@@ -17,7 +18,7 @@ On Ubuntu/Debian:
 
 ```bash
 sudo apt update
-sudo apt install python3 python3-tk python3-pil ghostscript cups cups-client cups-bsd
+sudo apt install python3 python3-tk python3-pil python3-ldap3 ghostscript cups cups-client cups-bsd
 ```
 
 | Package | Why |
@@ -25,6 +26,7 @@ sudo apt install python3 python3-tk python3-pil ghostscript cups cups-client cup
 | `python3` | Runtime (3.11+) |
 | `python3-tk` | Fax popup and phonebook |
 | `python3-pil` | Smooth preview scaling (optional but recommended) |
+| `python3-ldap3` | LDAP client for NovaMail / standard directories |
 | `ghostscript` | PDF/PS → MMR/G4 at 200 dpi, A4, 1728×2259 |
 | `cups` / `cups-client` / `cups-bsd` | Printer queue, `lpadmin`, `lp` |
 
@@ -37,7 +39,7 @@ Do **not** double-click / `apt install` the `.deb` straight from `~/Downloads` �
 ```bash
 # download both files from the GitHub Release into ~/Downloads, then:
 chmod +x install-deb.sh
-sudo ./install-deb.sh ~/Downloads/ricoh-lanfax_0.2.2_all.deb
+sudo ./install-deb.sh ~/Downloads/ricoh-lanfax_0.3.0_all.deb
 ```
 
 Or, if `install-deb.sh` sits next to the `.deb` / finds it in `~/Downloads`:
@@ -82,9 +84,28 @@ sudo ./uninstall-printer.sh
 Stored only on the local machine (not in this repository):
 
 - `~/.config/ricoh-lanfax/config.json` — printer host/port, cover defaults
-- `~/.config/ricoh-lanfax/phonebook.json` — contacts, recents, favorites
+- `~/.config/ricoh-lanfax/phonebook.json` — contacts, recents, favorites, directory sources
 
 Do not commit those files.
+
+### Local vs NovaMail / LDAP
+
+In **Ricoh LAN-Fax** (app menu) → **Adressbuch-Quelle…**, or in the phonebook → **Quelle…**:
+
+1. **Lokales Adressbuch** — contacts only on this PC  
+2. **Verzeichnis (LDAP / vCard / NovaMail)** — shared book from another host  
+
+For [NovaMail](https://github.com/AniGerm/NovaMail) on the main PC (**Server / shared address book** mode):
+
+1. Enter the NovaMail LAN IP and click **NovaMail-Standard**  
+2. Paste the password shown in NovaMail (same as CardDAV)  
+3. Keep **LDAP** enabled (port **1389**, base `ou=people,dc=novamail`, bind `cn=novamail,dc=novamail`)  
+4. Optionally enable CardDAV/vCard (`http://<host>:8765/addressbooks/novamail/`)  
+5. **Verbindung prüfen** → **Speichern**
+
+Fax numbers prefer `facsimileTelephoneNumber` / `TEL;TYPE=FAX`, then voice numbers.
+
+Example file: [phonebook.ldap.example.json](phonebook.ldap.example.json)
 
 ## Send from the command line
 

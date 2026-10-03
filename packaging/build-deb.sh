@@ -39,13 +39,14 @@ Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: $ARCH
-Depends: python3 (>= 3.11), python3-tk, python3-pil, ghostscript, cups, cups-client, cups-bsd
+Depends: python3 (>= 3.11), python3-tk, python3-pil, python3-ldap3, ghostscript, cups, cups-client, cups-bsd
 Maintainer: Ricoh LAN-Fax contributors <noreply@example.com>
 Homepage: https://github.com/AniGerm/Ricoh-LAN-Fax
 Description: Linux CUPS LAN-Fax printer for Ricoh IM 350F
  Unofficial CUPS printer that opens a fax number dialog (phonebook,
  cover page, preview) and sends a Windows-compatible RAW job to TCP 9100.
- Includes an Ubuntu app-menu entry for printer IP/port and phonebook.
+ Includes NovaMail-compatible LDAP/CardDAV address book support and an
+ Ubuntu app-menu entry for printer IP/port and directory settings.
  The Windows capture sink / lab GUI is not included.
 EOF
 

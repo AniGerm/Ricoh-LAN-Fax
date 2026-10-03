@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "contacts": [],
+  "recents": [],
+  "sources": {
+    "mode": "directory",
+    "ldap": {
+      "enabled": true,
+      "url": "ldap://192.168.1.10:1389",
+      "bind_dn": "cn=novamail,dc=novamail",
+      "bind_password": "PASSWORT-AUS-NOVAMail-UI",
+      "base_dn": "ou=people,dc=novamail",
+      "filter": "(objectClass=inetOrgPerson)",
+      "name_attr": "cn",
+      "number_attrs": ["facsimileTelephoneNumber", "telephoneNumber", "fax", "mobile"],
+      "preset": "novamail"
+    },
+    "vcard": {
+      "enabled": false,
+      "path": "http://192.168.1.10:8765/addressbooks/novamail/",
+      "username": "novamail",
+      "password": "PASSWORT-AUS-NOVAMail-UI"
+    }
+  }
+}

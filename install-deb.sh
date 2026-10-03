@@ -5,7 +5,7 @@
 # 3) install from /tmp
 set -euo pipefail
 
-DEPS=(python3 python3-tk python3-pil ghostscript cups cups-client cups-bsd)
+DEPS=(python3 python3-tk python3-pil python3-ldap3 ghostscript cups cups-client cups-bsd)
 
 usage() {
   echo "Usage: sudo $0 [path/to/ricoh-lanfax_VERSION_all.deb]"

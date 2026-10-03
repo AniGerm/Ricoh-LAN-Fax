@@ -78,8 +78,9 @@ class BookTests(unittest.TestCase):
         self.assertIsNotNone(linked)
         self.assertEqual(linked.name, "Labor")
 
-    def test_ldap_vcard_hooks_stay_inert(self) -> None:
+    def test_ldap_vcard_disabled_in_local_mode(self) -> None:
         cfg = {
+            "mode": "local",
             "ldap": {**DEFAULT_SOURCES["ldap"], "enabled": True, "url": "ldap://example.invalid"},
             "vcard": {**DEFAULT_SOURCES["vcard"], "enabled": True, "path": "/tmp/none.vcf"},
         }
@@ -87,6 +88,8 @@ class BookTests(unittest.TestCase):
         self.assertEqual(len(extra), 2)
         self.assertEqual(extra[0].source_id, "ldap")
         self.assertEqual(extra[1].source_id, "vcard")
+        self.assertFalse(extra[0].enabled)
+        self.assertFalse(extra[1].enabled)
         self.assertEqual(extra[0].list_contacts(), [])
         self.assertEqual(extra[1].search("x"), [])
 
