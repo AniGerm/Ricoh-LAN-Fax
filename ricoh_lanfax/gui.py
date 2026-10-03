@@ -14,7 +14,6 @@ from .config import Settings, load_settings, parse_numbers, save_settings
 from .phonebook import Contact, Recent, compact_number, load_book, save_book
 from .theme import apply_theme, button, prepare_treeview, style_text
 from .pjl import format_report, parse_job
-from .sink import guess_ipv4, start_servers, stop_servers
 from .spool import pending_jobs
 
 ZOOM_STEPS = (50, 75, 100, 125, 150, 200, 250, 300)
@@ -122,9 +121,14 @@ def list_ipv4() -> list[str]:
                 addrs.append(ip)
     except OSError:
         pass
-    guessed = guess_ipv4()
-    if guessed not in addrs:
-        addrs.insert(0, guessed)
+    try:
+        from .sink import guess_ipv4
+
+        guessed = guess_ipv4()
+        if guessed not in addrs:
+            addrs.insert(0, guessed)
+    except ImportError:
+        pass
     return addrs or ["127.0.0.1"]
 
 
@@ -1268,6 +1272,11 @@ class SinkGui:
     def start(self) -> None:
         if self.servers:
             return
+        try:
+            from .sink import start_servers
+        except ImportError:
+            self.messagebox.showerror("Sink", "Lab-Sink-Modul fehlt in dieser Installation.")
+            return
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.servers = start_servers("0.0.0.0", self.port, self.out_dir, self._gui_log)
         ips = ", ".join(list_ipv4())
@@ -1278,6 +1287,8 @@ class SinkGui:
     def stop(self) -> None:
         if not self.servers:
             return
+        from .sink import stop_servers
+
         stop_servers(self.servers, self._gui_log)
         self.servers = []
         ips = ", ".join(list_ipv4())
