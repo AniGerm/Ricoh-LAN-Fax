@@ -11,7 +11,16 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import Settings, load_settings, parse_numbers, save_settings
-from .phonebook import Contact, Recent, compact_number, load_book, save_book
+from .phonebook import (
+    MODE_DIRECTORY,
+    MODE_LOCAL,
+    Contact,
+    Recent,
+    compact_number,
+    load_book,
+    save_book,
+    save_sources_config,
+)
 from .theme import apply_theme, button, prepare_treeview, style_text
 from .pjl import format_report, parse_job
 from .spool import pending_jobs
@@ -209,6 +218,232 @@ class SettingsDialog:
         self.win.destroy()
 
 
+class DirectorySettingsDialog:
+    """Choose local address book vs LDAP/vCard (NovaMail defaults)."""
+
+    def __init__(self, tk: Any, ttk: Any, messagebox: Any, parent: Any, on_save: Callable[[], None] | None = None) -> None:
+        self.tk = tk
+        self.ttk = ttk
+        self.messagebox = messagebox
+        self.on_save = on_save
+        self.book = load_book()
+        cfg = self.book.sources_config
+        ldap = dict(cfg.get("ldap") or {})
+        vcard = dict(cfg.get("vcard") or {})
+
+        win = tk.Toplevel(parent)
+        self.win = win
+        win.title("Adressbuch-Quelle")
+        win.geometry("560x520")
+        win.minsize(520, 480)
+        win.resizable(False, False)
+        win.transient(parent)
+        apply_theme(win)
+
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Adressbuch-Quelle", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(
+            frm,
+            text="Lokal speichern oder gemeinsames Verzeichnis (NovaMail LDAP/CardDAV, Standard-LDAP).",
+            style="Muted.TLabel",
+            wraplength=500,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 12))
+
+        self.mode = tk.StringVar(master=win, value=self.book.mode())
+        mode_row = ttk.Frame(frm)
+        mode_row.pack(fill="x")
+        ttk.Radiobutton(
+            mode_row,
+            text="Lokales Adressbuch",
+            value=MODE_LOCAL,
+            variable=self.mode,
+            command=self._sync_mode,
+        ).pack(anchor="w")
+        ttk.Radiobutton(
+            mode_row,
+            text="Verzeichnis (LDAP / vCard / NovaMail)",
+            value=MODE_DIRECTORY,
+            variable=self.mode,
+            command=self._sync_mode,
+        ).pack(anchor="w", pady=(4, 0))
+
+        self.dir_frame = ttk.LabelFrame(frm, text="Verzeichnis", padding=12)
+        self.dir_frame.pack(fill="both", expand=True, pady=(14, 0))
+
+        preset = ttk.Frame(self.dir_frame)
+        preset.pack(fill="x")
+        ttk.Label(preset, text="NovaMail-Host (LAN-IP)").pack(side="left")
+        self.novamail_host = ttk.Entry(preset, width=22)
+        self.novamail_host.pack(side="left", padx=(8, 0))
+        # Prefill host from ldap URL if present
+        url = str(ldap.get("url") or "")
+        host_guess = ""
+        if "://" in url:
+            host_guess = url.split("://", 1)[1].split(":", 1)[0].split("/", 1)[0]
+        self.novamail_host.insert(0, host_guess)
+        button(preset, text="NovaMail-Standard", command=self.apply_novamail).pack(side="right")
+
+        self.use_ldap = tk.BooleanVar(master=win, value=bool(ldap.get("enabled", True)))
+        self.use_vcard = tk.BooleanVar(master=win, value=bool(vcard.get("enabled", False)))
+        ttk.Checkbutton(self.dir_frame, text="LDAP nutzen (empfohlen für NovaMail)", variable=self.use_ldap).pack(
+            anchor="w", pady=(10, 0)
+        )
+        ttk.Checkbutton(
+            self.dir_frame,
+            text="vCard / CardDAV zusätzlich oder alternativ",
+            variable=self.use_vcard,
+        ).pack(anchor="w", pady=(2, 8))
+
+        grid = ttk.Frame(self.dir_frame)
+        grid.pack(fill="x")
+        grid.columnconfigure(1, weight=1)
+
+        def row(label: str, r: int, width: int = 36) -> Any:
+            ttk.Label(grid, text=label).grid(row=r, column=0, sticky="w", pady=3)
+            entry = ttk.Entry(grid, width=width)
+            entry.grid(row=r, column=1, sticky="ew", pady=3, padx=(8, 0))
+            return entry
+
+        self.ldap_url = row("LDAP-URL", 0)
+        self.ldap_url.insert(0, str(ldap.get("url") or ""))
+        self.bind_dn = row("Bind-DN", 1)
+        self.bind_dn.insert(0, str(ldap.get("bind_dn") or ""))
+        self.base_dn = row("Base-DN", 2)
+        self.base_dn.insert(0, str(ldap.get("base_dn") or ""))
+        self.bind_password = row("Passwort", 3)
+        self.bind_password.insert(0, str(ldap.get("bind_password") or vcard.get("password") or ""))
+        try:
+            self.bind_password.configure(show="•")
+        except self.tk.TclError:
+            pass
+        self.vcard_path = row("vCard/CardDAV", 4)
+        self.vcard_path.insert(0, str(vcard.get("path") or ""))
+        self.vcard_user = row("CardDAV-User", 5)
+        self.vcard_user.insert(0, str(vcard.get("username") or "novamail"))
+
+        self.status = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=500, justify="left")
+        self.status.pack(anchor="w", pady=(10, 0))
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x", pady=(12, 0))
+        button(btns, text="Verbindung prüfen", command=self.test).pack(side="left")
+        button(btns, text="Abbrechen", command=win.destroy).pack(side="right")
+        button(btns, text="Speichern", command=self.save, variant="primary").pack(side="right", padx=(0, 8))
+
+        self._sync_mode()
+        win.grab_set()
+
+    def _sync_mode(self) -> None:
+        state = "normal" if self.mode.get() == MODE_DIRECTORY else "disabled"
+        for child in self.dir_frame.winfo_children():
+            try:
+                child.configure(state=state)
+            except self.tk.TclError:
+                for sub in child.winfo_children():
+                    try:
+                        sub.configure(state=state)
+                    except self.tk.TclError:
+                        pass
+
+    def apply_novamail(self) -> None:
+        from .directory import novamail_defaults
+
+        host = self.novamail_host.get().strip()
+        if not host:
+            self.messagebox.showinfo("NovaMail", "Bitte die LAN-IP des NovaMail-PCs eintragen.", parent=self.win)
+            return
+        password = self.bind_password.get()
+        defaults = novamail_defaults(host, password=password, username=self.vcard_user.get().strip() or "novamail")
+        self.mode.set(MODE_DIRECTORY)
+        self.use_ldap.set(True)
+        self.use_vcard.set(False)
+        for entry, value in (
+            (self.ldap_url, defaults["ldap"]["url"]),
+            (self.bind_dn, defaults["ldap"]["bind_dn"]),
+            (self.base_dn, defaults["ldap"]["base_dn"]),
+            (self.vcard_path, defaults["vcard"]["path"]),
+            (self.vcard_user, defaults["vcard"]["username"]),
+        ):
+            entry.delete(0, "end")
+            entry.insert(0, str(value))
+        self._sync_mode()
+        self.status.config(text="NovaMail-Standard geladen (LDAP :1389, Base ou=people,dc=novamail).")
+
+    def _collect(self) -> dict[str, Any]:
+        mode = MODE_DIRECTORY if self.mode.get() == MODE_DIRECTORY else MODE_LOCAL
+        password = self.bind_password.get()
+        return {
+            "mode": mode,
+            "ldap": {
+                "enabled": bool(self.use_ldap.get()) if mode == MODE_DIRECTORY else False,
+                "url": self.ldap_url.get().strip(),
+                "bind_dn": self.bind_dn.get().strip(),
+                "bind_password": password,
+                "base_dn": self.base_dn.get().strip(),
+                "filter": "(objectClass=inetOrgPerson)",
+                "name_attr": "cn",
+                "number_attrs": ["facsimileTelephoneNumber", "telephoneNumber", "fax", "mobile"],
+                "preset": "novamail" if "novamail" in self.base_dn.get().lower() else "",
+            },
+            "vcard": {
+                "enabled": bool(self.use_vcard.get()) if mode == MODE_DIRECTORY else False,
+                "path": self.vcard_path.get().strip(),
+                "username": self.vcard_user.get().strip() or "novamail",
+                "password": password,
+            },
+        }
+
+    def test(self) -> None:
+        from .directory import probe_ldap, probe_vcard
+
+        cfg = self._collect()
+        if cfg["mode"] != MODE_DIRECTORY:
+            self.status.config(text="Lokaler Modus — kein Verzeichnis-Test nötig.")
+            return
+        messages: list[str] = []
+        try:
+            if cfg["ldap"]["enabled"]:
+                messages.append(
+                    probe_ldap(
+                        url=cfg["ldap"]["url"],
+                        base_dn=cfg["ldap"]["base_dn"],
+                        bind_dn=cfg["ldap"]["bind_dn"],
+                        bind_password=cfg["ldap"]["bind_password"],
+                        search_filter=cfg["ldap"]["filter"],
+                    )
+                )
+            if cfg["vcard"]["enabled"]:
+                messages.append(
+                    probe_vcard(
+                        cfg["vcard"]["path"],
+                        username=cfg["vcard"]["username"],
+                        password=cfg["vcard"]["password"],
+                    )
+                )
+            if not messages:
+                messages.append("Bitte LDAP und/oder vCard aktivieren.")
+            self.status.config(text=" · ".join(messages))
+        except Exception as exc:  # noqa: BLE001
+            self.status.config(text=f"Fehler: {exc}")
+
+    def save(self) -> None:
+        cfg = self._collect()
+        if cfg["mode"] == MODE_DIRECTORY and not cfg["ldap"]["enabled"] and not cfg["vcard"]["enabled"]:
+            self.messagebox.showerror(
+                "Adressbuch",
+                "Im Verzeichnismodus bitte LDAP und/oder vCard aktivieren.",
+                parent=self.win,
+            )
+            return
+        save_sources_config(cfg)
+        if self.on_save:
+            self.on_save()
+        self.win.destroy()
+
+
 class PhonebookDialog:
     FILTERS = (("recent", "Zuletzt benutzt"), ("favorite", "Favoriten"), ("all", "Alle"))
 
@@ -289,6 +524,7 @@ class PhonebookDialog:
         button(btns, text="Speichern…", command=self.save_selected).pack(side="left", padx=(8, 0))
         button(btns, text="Favorit", command=self.toggle_favorite).pack(side="left", padx=(8, 0))
         button(btns, text="Löschen", command=self.delete_selected).pack(side="left", padx=(8, 0))
+        button(btns, text="Quelle…", command=self.open_directory_settings).pack(side="left", padx=(8, 0))
         button(btns, text="Schließen", command=win.destroy).pack(side="right")
         button(btns, text="Übernehmen", command=self.apply, variant="primary").pack(side="right", padx=(0, 8))
 
@@ -312,6 +548,13 @@ class PhonebookDialog:
         self._filter = key
         self._filter_var.set(key)
         self.refresh()
+
+    def open_directory_settings(self) -> None:
+        def after() -> None:
+            self.book = load_book()
+            self.refresh()
+
+        DirectorySettingsDialog(self.tk, self.ttk, self.messagebox, self.win, on_save=after)
 
     def _selected(self) -> list[tuple[str, Contact | Recent]]:
         out: list[tuple[str, Contact | Recent]] = []
@@ -1349,12 +1592,16 @@ def run_settings_app() -> int:
     def open_ip() -> None:
         SettingsDialog(tk, ttk, messagebox, root, load_settings(), refresh_target)
 
+    def open_directory() -> None:
+        DirectorySettingsDialog(tk, ttk, messagebox, root)
+
     def open_phonebook() -> None:
         PhonebookDialog(tk, ttk, messagebox, root, lambda _numbers: None)
 
     btns = ttk.Frame(frm)
     btns.pack(fill="x")
     button(btns, text="Drucker-IP / Port…", command=open_ip, variant="primary").pack(side="left")
+    button(btns, text="Adressbuch-Quelle…", command=open_directory).pack(side="left", padx=(8, 0))
     button(btns, text="Telefonbuch…", command=open_phonebook).pack(side="left", padx=(8, 0))
     button(btns, text="Schließen", command=root.destroy).pack(side="right")
 
