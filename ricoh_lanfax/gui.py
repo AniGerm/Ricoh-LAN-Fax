@@ -1314,6 +1314,57 @@ class SinkGui:
         self.root.destroy()
 
 
+def run_settings_app() -> int:
+    """Ubuntu menu entry: configure printer IP/port and manage the phonebook (no sink)."""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox, ttk
+    except ImportError:
+        print("Tkinter fehlt. Auf Ubuntu: sudo apt install python3-tk", file=sys.stderr)
+        return 1
+
+    root = tk.Tk()
+    root.title("Ricoh LAN-Fax")
+    root.resizable(False, False)
+    apply_theme(root)
+
+    frm = ttk.Frame(root, padding=20)
+    frm.pack(fill="both", expand=True)
+
+    settings = load_settings()
+    target = ttk.Label(frm, text=f"Ziel: {settings.display_target()}", style="Title.TLabel")
+    target.pack(anchor="w")
+    ttk.Label(
+        frm,
+        text="IP und Telefonbuch ohne Druckauftrag — Faxen weiter über den Drucker „Ricoh-LAN-Fax“.",
+        style="Muted.TLabel",
+        wraplength=420,
+        justify="left",
+    ).pack(anchor="w", pady=(6, 16))
+
+    def refresh_target(_settings: Settings | None = None) -> None:
+        del _settings
+        target.config(text=f"Ziel: {load_settings().display_target()}")
+
+    def open_ip() -> None:
+        SettingsDialog(tk, ttk, messagebox, root, load_settings(), refresh_target)
+
+    def open_phonebook() -> None:
+        PhonebookDialog(tk, ttk, messagebox, root, lambda _numbers: None)
+
+    btns = ttk.Frame(frm)
+    btns.pack(fill="x")
+    button(btns, text="Drucker-IP / Port…", command=open_ip, variant="primary").pack(side="left")
+    button(btns, text="Telefonbuch…", command=open_phonebook).pack(side="left", padx=(8, 0))
+    button(btns, text="Schließen", command=root.destroy).pack(side="right")
+
+    root.protocol("WM_DELETE_WINDOW", root.destroy)
+    # Open IP dialog immediately so the menu entry feels like “the settings popup”.
+    root.after(50, open_ip)
+    root.mainloop()
+    return 0
+
+
 def run_gui(project: Path | None = None) -> int:
     try:
         import tkinter as tk

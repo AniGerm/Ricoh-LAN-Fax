@@ -1,10 +1,10 @@
 [Desktop Entry]
 Name=Ricoh LAN-Fax
-Comment=Linux LAN-Fax popup for Ricoh IM 350F
-Exec=/usr/local/share/ricoh-lanfax/start.sh
-Path=/usr/local/share/ricoh-lanfax
+Comment=Drucker-IP und Telefonbuch für Ricoh LAN-Fax
+Exec=/usr/local/bin/ricoh-lanfax settings
 Icon=printer
 Terminal=false
 Type=Application
 Categories=Office;Utility;
 StartupNotify=true
+Keywords=fax;ricoh;lanfax;telefonbuch;

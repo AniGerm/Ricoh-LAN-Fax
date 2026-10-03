@@ -8,6 +8,7 @@ This is not an official Ricoh product. Do not publish captures, phone numbers, o
 
 - CUPS printer **Ricoh-LAN-Fax** with a number dialog (no extra app has to stay open)
 - Cover page, preview, zoom, and a local address book (favorites, recents, search)
+- Ubuntu app-menu entry **Ricoh LAN-Fax** to set the device IP/port and manage the phonebook without printing
 - Production install / `.deb` ships the printer path only — **no** Windows capture sink app
 
 ## Dependencies
@@ -32,7 +33,7 @@ sudo apt install python3 python3-tk python3-pil ghostscript cups cups-client cup
 ### From a release `.deb`
 
 ```bash
-sudo apt install ./ricoh-lanfax_0.2.0_all.deb
+sudo apt install ./ricoh-lanfax_0.2.1_all.deb
 ```
 
 ### From a git checkout
@@ -43,9 +44,13 @@ cd Ricoh-LAN-Fax
 sudo ./install-printer.sh
 ```
 
-This installs the CUPS queue, backend, and fax popup (including phonebook). It does **not** install the lab sink desktop app.
+This installs the CUPS queue, backend, fax popup (including phonebook), and an Ubuntu menu entry. It does **not** install the lab sink app.
 
-Then print to **Ricoh-LAN-Fax** from LibreOffice, Firefox, and similar. A dialog asks for fax numbers. Set the **device IP** (IM 350F, Raw 9100) with the gear icon.
+Then print to **Ricoh-LAN-Fax** from LibreOffice, Firefox, and similar. A dialog asks for fax numbers. Or open **Ricoh LAN-Fax** from the app menu to set the **device IP** (IM 350F, Raw 9100) and edit the phonebook without a print job:
+
+```bash
+ricoh-lanfax settings
+```
 
 Stuck jobs:
 

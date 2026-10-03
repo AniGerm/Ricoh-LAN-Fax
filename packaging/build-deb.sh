@@ -19,15 +19,17 @@ mkdir -p \
   "$STAGE/usr/local/bin" \
   "$STAGE/usr/lib/cups/backend" \
   "$STAGE/usr/share/ppd/ricoh" \
+  "$STAGE/usr/share/applications" \
   "$STAGE/usr/share/doc/$PKG_NAME"
 
 cp -a "$ROOT/ricoh_lanfax" "$STAGE/usr/local/share/ricoh-lanfax/ricoh_lanfax"
 find "$STAGE/usr/local/share/ricoh-lanfax" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 
-# Keep sink modules in the tree for CLI/dev parity, but never ship lab launchers.
+# Settings menu yes; lab sink launcher (start.sh) no.
 install -m 755 "$ROOT/ricoh-lanfax" "$STAGE/usr/local/bin/ricoh-lanfax"
 install -m 700 "$ROOT/cups/ricohlanfax" "$STAGE/usr/lib/cups/backend/ricohlanfax"
 install -m 644 "$ROOT/cups/ricoh-lanfax.ppd" "$STAGE/usr/share/ppd/ricoh/ricoh-lanfax.ppd"
+install -m 644 "$ROOT/Ricoh-LAN-Fax.desktop" "$STAGE/usr/share/applications/Ricoh-LAN-Fax.desktop"
 install -m 644 "$ROOT/LICENSE" "$STAGE/usr/share/doc/$PKG_NAME/copyright"
 install -m 644 "$ROOT/README.md" "$STAGE/usr/share/doc/$PKG_NAME/README.md"
 
@@ -40,11 +42,11 @@ Architecture: $ARCH
 Depends: python3 (>= 3.11), python3-tk, python3-pil, ghostscript, cups, cups-client, cups-bsd
 Maintainer: Ricoh LAN-Fax contributors <noreply@example.com>
 Homepage: https://github.com/AniGerm/Ricoh-LAN-Fax
-Description: Linux CUPS LAN-Fax printer for Ricoh IM 350F
+ Description: Linux CUPS LAN-Fax printer for Ricoh IM 350F
  Unofficial CUPS printer that opens a fax number dialog (phonebook,
  cover page, preview) and sends a Windows-compatible RAW job to TCP 9100.
- This package installs the production printer path only; the Windows
- capture sink / lab GUI is not included.
+ Includes an Ubuntu app-menu entry for printer IP/port and phonebook.
+ The Windows capture sink / lab GUI is not included.
 EOF
 
 cat >"$STAGE/DEBIAN/postinst" <<'EOF'
@@ -71,7 +73,7 @@ if command -v lpadmin >/dev/null 2>&1; then
   cupsaccept "$PRINTER_NAME" 2>/dev/null || true
 fi
 
-echo "ricoh-lanfax: printer '$PRINTER_NAME' ready (no sink/lab app)."
+echo "ricoh-lanfax: printer '$PRINTER_NAME' ready; menu entry „Ricoh LAN-Fax“ for IP/phonebook."
 EOF
 
 cat >"$STAGE/DEBIAN/prerm" <<'EOF'
@@ -100,9 +102,21 @@ OUT="$DIST/${PKG_NAME}_${VERSION}_${ARCH}.deb"
 dpkg-deb --root-owner-group --build "$STAGE" "$OUT" >/dev/null
 echo "Wrote $OUT"
 dpkg-deb --info "$OUT" | sed -n '1,20p'
-dpkg-deb --contents "$OUT" | grep -E 'start\.sh|Ricoh-LAN-Fax\.desktop|sink\.py|ricohlanfax|phonebook' || true
-# Fail the build if lab launchers leaked into the package.
-if dpkg-deb --contents "$OUT" | grep -E 'start\.sh|Ricoh-LAN-Fax\.desktop' >/dev/null; then
-  echo "ERROR: lab launcher found in package" >&2
+dpkg-deb --contents "$OUT" | grep -E 'start\.sh|Ricoh-LAN-Fax\.desktop|ricohlanfax|phonebook' || true
+# Fail the build if the lab sink launcher leaked into the package.
+if dpkg-deb --contents "$OUT" | grep -E 'start\.sh' >/dev/null; then
+  echo "ERROR: lab start.sh found in package" >&2
   exit 1
 fi
+if ! dpkg-deb --contents "$OUT" | grep -E 'Ricoh-LAN-Fax\.desktop' >/dev/null; then
+  echo "ERROR: settings desktop entry missing from package" >&2
+  exit 1
+fi
+TMP_DESK="$(mktemp)"
+dpkg-deb --fsys-tarfile "$OUT" | tar -xO ./usr/share/applications/Ricoh-LAN-Fax.desktop >"$TMP_DESK"
+if ! grep -q 'ricoh-lanfax settings' "$TMP_DESK"; then
+  echo "ERROR: desktop entry does not launch settings" >&2
+  rm -f "$TMP_DESK"
+  exit 1
+fi
+rm -f "$TMP_DESK"
