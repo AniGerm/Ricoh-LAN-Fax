@@ -127,6 +127,12 @@ def cmd_gui(_args: argparse.Namespace) -> int:
     return run_gui()
 
 
+def cmd_settings(_args: argparse.Namespace) -> int:
+    from .gui import run_settings_app
+
+    return run_settings_app()
+
+
 def cmd_cups(args: argparse.Namespace) -> int:
     from .cups_backend import run_backend
 
@@ -136,7 +142,7 @@ def cmd_cups(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ricoh-lanfax",
-        description="Capture and replay Ricoh LAN-Fax RAW/PJL jobs (IM 350F lab sink).",
+        description="Ricoh LAN-Fax for Linux: CUPS popup sender and optional lab tools.",
     )
     parser.add_argument("--version", action="version", version=f"ricoh-lanfax {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -185,8 +191,11 @@ def build_parser() -> argparse.ArgumentParser:
     catalog.add_argument("--out", default="captures/pjl-rfax.txt")
     catalog.set_defaults(func=cmd_catalog)
 
-    gui = sub.add_parser("gui", help="Labor-GUI (Capture-Sink)")
+    gui = sub.add_parser("gui", help="Labor-GUI (Capture-Sink, nicht in der .deb-Installation)")
     gui.set_defaults(func=cmd_gui)
+
+    settings = sub.add_parser("settings", help="Ubuntu-Menü: Drucker-IP/Port und Telefonbuch")
+    settings.set_defaults(func=cmd_settings)
 
     popup = sub.add_parser("popup", help="Fax-Nummern-Dialog für einen Spool-Job")
     popup.add_argument("job_json")

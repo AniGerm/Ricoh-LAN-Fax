@@ -79,7 +79,8 @@ jobs:
           NOTES="$(cat <<EOF
           ## Ricoh LAN-Fax $VERSION
 
-          Production install: CUPS printer **Ricoh-LAN-Fax** with fax popup (phonebook, cover page, preview).
+          Production install: CUPS printer **Ricoh-LAN-Fax** with fax popup (phonebook, cover page, preview),
+          plus an Ubuntu app-menu entry for IP/port and phonebook settings.
           The Windows capture sink / lab GUI is **not** included in this package.
 
           ### Install
