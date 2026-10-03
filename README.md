@@ -1,14 +1,14 @@
 # Ricoh LAN-Fax for Linux
 
-Unofficial Linux path for **Ricoh LAN-Fax Generic** (tested against an IM 350F lab). Print from any application to a CUPS printer, pick recipients in a popup, and send a Windows-shaped RAW job to TCP **9100**.
+Unofficial Linux path for **Ricoh LAN-Fax Generic** (tested against an IM 350F lab). Print from any application to a CUPS printer, pick recipients in a popup (phonebook, cover page, preview), and send a Windows-shaped RAW job to TCP **9100**.
 
 This is not an official Ricoh product. Do not publish captures, phone numbers, or printer IPs.
 
 ## Features
 
 - CUPS printer **Ricoh-LAN-Fax** with a number dialog (no extra app has to stay open)
-- Cover page, preview, zoom, and a local address book (LDAP/vCard hooks later)
-- Optional capture sink so a Windows VM can fax into this machine for protocol checks
+- Cover page, preview, zoom, and a local address book (favorites, recents, search)
+- Production install / `.deb` ships the printer path only — **no** Windows capture sink app
 
 ## Dependencies
 
@@ -22,20 +22,28 @@ sudo apt install python3 python3-tk python3-pil ghostscript cups cups-client cup
 | Package | Why |
 | --- | --- |
 | `python3` | Runtime (3.11+) |
-| `python3-tk` | Popup and lab GUI |
+| `python3-tk` | Fax popup and phonebook |
 | `python3-pil` | Smooth preview scaling (optional but recommended) |
 | `ghostscript` | PDF/PS → MMR/G4 at 200 dpi, A4, 1728×2259 |
 | `cups` / `cups-client` / `cups-bsd` | Printer queue, `lpadmin`, `lp` |
 
-No PyPI packages are required. Python’s standard library is enough for send/sink.
+## Install (production)
 
-## Install the printer
+### From a release `.deb`
+
+```bash
+sudo apt install ./ricoh-lanfax_0.2.0_all.deb
+```
+
+### From a git checkout
 
 ```bash
 git clone https://github.com/AniGerm/Ricoh-LAN-Fax.git
 cd Ricoh-LAN-Fax
 sudo ./install-printer.sh
 ```
+
+This installs the CUPS queue, backend, and fax popup (including phonebook). It does **not** install the lab sink desktop app.
 
 Then print to **Ricoh-LAN-Fax** from LibreOffice, Firefox, and similar. A dialog asks for fax numbers. Set the **device IP** (IM 350F, Raw 9100) with the gear icon.
 
@@ -47,7 +55,12 @@ cancel -a Ricoh-LAN-Fax
 
 Backend log: `/var/tmp/ricoh-lanfax/backend.log`
 
-After code updates, run `sudo ./install-printer.sh` again (or keep using the checkout if the backend still finds `./ricoh_lanfax` next to `cups/`).
+Remove:
+
+```bash
+sudo ./uninstall-printer.sh
+# or: sudo apt remove ricoh-lanfax
+```
 
 ## Address book and settings
 
@@ -61,31 +74,36 @@ Do not commit those files.
 ## Send from the command line
 
 ```bash
-python3 -m ricoh_lanfax send document.pdf --host <PRINTER_IP> --number 0123456789
+ricoh-lanfax send document.pdf --host <PRINTER_IP> --number 0123456789
+# or: python3 -m ricoh_lanfax send …
 ```
 
 `--dry-run` builds the job without connecting. `--dump path.raw` writes the RAW stream.
 
-## Lab sink (optional)
+## Lab sink (developers only)
 
-Capture Windows LAN-Fax Generic jobs on this host:
+The Windows capture sink / lab GUI is **not** part of the production install. From a git checkout:
 
 ```bash
-./start.sh --terminal
+./start.sh --terminal   # terminal sink on Raw 9100
+./start.sh              # lab GUI (close it while printing via CUPS)
 ```
 
-Point the Windows printer at **Raw 9100** on this computer. Files appear under `captures/` (gitignored). Inspect:
+Point a Windows LAN-Fax printer at **Raw 9100** on this computer. Files appear under `captures/` (gitignored). Inspect:
 
 ```bash
 python3 -m ricoh_lanfax parse captures/job.raw
 python3 -m ricoh_lanfax diff captures/a.raw captures/b.raw
 ```
 
-GUI lab window (close it while printing via CUPS so it does not steal the popup):
+## Build a `.deb`
 
 ```bash
-./start.sh
+./packaging/build-deb.sh
+# → dist/ricoh-lanfax_<version>_all.deb
 ```
+
+Tagged releases (`v*`) build the package in GitHub Actions and attach it to the GitHub Release.
 
 ## Tests
 

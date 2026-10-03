@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v prefix (default: package __version__)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-tk python3-pil ghostscript cups cups-client cups-bsd dpkg-dev
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -q
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.version }}" ]]; then
+            VERSION="${{ inputs.version }}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(python3 -c 'from ricoh_lanfax import __version__; print(__version__)')"
+          fi
+          PKG_VERSION="$(python3 -c 'from ricoh_lanfax import __version__; print(__version__)')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Package __version__=$PKG_VERSION  release version=$VERSION"
+          if [[ "$VERSION" != "$PKG_VERSION" ]]; then
+            echo "WARNING: tag/input version ($VERSION) differs from ricoh_lanfax.__version__ ($PKG_VERSION)" >&2
+          fi
+
+      - name: Build .deb
+        run: |
+          chmod +x packaging/build-deb.sh
+          ./packaging/build-deb.sh
+          ls -la dist/
+
+      - name: Ensure release tag exists
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TAG="${{ steps.ver.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists"
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+          DEB="dist/ricoh-lanfax_${VERSION}_all.deb"
+          if [[ ! -f "$DEB" ]]; then
+            DEB="$(ls dist/ricoh-lanfax_*_all.deb | head -n1)"
+          fi
+          NOTES="$(cat <<EOF
+          ## Ricoh LAN-Fax $VERSION
+
+          Production install: CUPS printer **Ricoh-LAN-Fax** with fax popup (phonebook, cover page, preview).
+          The Windows capture sink / lab GUI is **not** included in this package.
+
+          ### Install
+
+          \`\`\`bash
+          sudo apt install ./ricoh-lanfax_${VERSION}_all.deb
+          \`\`\`
+
+          Or from a checkout:
+
+          \`\`\`bash
+          sudo ./install-printer.sh
+          \`\`\`
+
+          Print to **Ricoh-LAN-Fax**, set the device IP in the gear dialog, pick recipients from the phonebook.
+          EOF
+          )"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DEB" --clobber
+          else
+            gh release create "$TAG" "$DEB" --title "Ricoh LAN-Fax $VERSION" --notes "$NOTES"
+          fi

@@ -20,6 +20,10 @@ License.txt
 README.html
 README-LANFAX.md
 
+# Build artifacts
+dist/
+*.deb
+
 # Python / editor
 __pycache__/
 *.py[cod]
