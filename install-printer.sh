@@ -15,6 +15,11 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+echo "==> Ensuring dependencies (python3-tk, cups, …)…"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y python3 python3-tk python3-pil ghostscript cups cups-client cups-bsd
+
 mkdir -p "$SPOOL/spool" "$SHARE"
 chmod 1777 "$SPOOL" "$SPOOL/spool"
 

@@ -30,10 +30,20 @@ sudo apt install python3 python3-tk python3-pil ghostscript cups cups-client cup
 
 ## Install (production)
 
-### From a release `.deb`
+### From a release `.deb` (recommended)
+
+Do **not** double-click / `apt install` the `.deb` straight from `~/Downloads` — apt then warns about the sandbox and may fail oddly. Use the installer script (copies the package to `/tmp`, installs `python3-tk` and friends first, then installs the `.deb`):
 
 ```bash
-sudo apt install ./ricoh-lanfax_0.2.1_all.deb
+# download both files from the GitHub Release into ~/Downloads, then:
+chmod +x install-deb.sh
+sudo ./install-deb.sh ~/Downloads/ricoh-lanfax_0.2.2_all.deb
+```
+
+Or, if `install-deb.sh` sits next to the `.deb` / finds it in `~/Downloads`:
+
+```bash
+sudo ./install-deb.sh
 ```
 
 ### From a git checkout

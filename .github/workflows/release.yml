@@ -83,23 +83,26 @@ jobs:
           plus an Ubuntu app-menu entry for IP/port and phonebook settings.
           The Windows capture sink / lab GUI is **not** included in this package.
 
-          ### Install
+          ### Install (recommended)
+
+          Download **both** \`ricoh-lanfax_${VERSION}_all.deb\` and \`install-deb.sh\`, then:
 
           \`\`\`bash
-          sudo apt install ./ricoh-lanfax_${VERSION}_all.deb
+          chmod +x install-deb.sh
+          sudo ./install-deb.sh ~/Downloads/ricoh-lanfax_${VERSION}_all.deb
           \`\`\`
 
-          Or from a checkout:
+          The script installs missing deps (\`python3-tk\`, …), copies the \`.deb\` to \`/tmp\`
+          (avoids the apt sandbox warning from \`~/Downloads\`), then installs from there.
 
-          \`\`\`bash
-          sudo ./install-printer.sh
-          \`\`\`
+          Or from a checkout: \`sudo ./install-printer.sh\`
 
-          Print to **Ricoh-LAN-Fax**, set the device IP in the gear dialog, pick recipients from the phonebook.
+          Afterwards: open **Ricoh LAN-Fax** from the Ubuntu menu to set the device IP, or print to **Ricoh-LAN-Fax**.
           EOF
           )"
+          chmod +x install-deb.sh
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$DEB" --clobber
+            gh release upload "$TAG" "$DEB" install-deb.sh --clobber
           else
-            gh release create "$TAG" "$DEB" --title "Ricoh LAN-Fax $VERSION" --notes "$NOTES"
+            gh release create "$TAG" "$DEB" install-deb.sh --title "Ricoh LAN-Fax $VERSION" --notes "$NOTES"
           fi
