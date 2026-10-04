@@ -146,6 +146,38 @@ def latest_raw(out_dir: Path) -> Path | None:
     return raws[0] if raws else None
 
 
+def _fit_window(
+    win: Any,
+    *,
+    min_width: int,
+    min_height: int,
+    width: int | None = None,
+    height: int | None = None,
+    resizable: bool = True,
+) -> None:
+    """Size a Tk window so controls stay reachable; allow the user to grow it."""
+    win.update_idletasks()
+    req_w = max(min_width, int(win.winfo_reqwidth()))
+    req_h = max(min_height, int(win.winfo_reqheight()))
+    win.minsize(min_width, min_height)
+    win.geometry(f"{width or req_w}x{height or req_h}")
+    win.resizable(bool(resizable), bool(resizable))
+
+
+def _bind_wraplength(label: Any, win: Any, *, pad: int = 48) -> None:
+    """Keep muted/help labels wrapping to the current window width."""
+
+    def _on_configure(_event: Any = None) -> None:
+        try:
+            width = max(240, int(win.winfo_width()) - pad)
+            label.configure(wraplength=width)
+        except Exception:  # noqa: BLE001
+            pass
+
+    win.bind("<Configure>", _on_configure, add="+")
+    win.after_idle(_on_configure)
+
+
 class SettingsDialog:
     def __init__(self, tk: Any, ttk: Any, messagebox: Any, parent: Any, settings: Settings, on_save: Callable[[Settings], None]) -> None:
         self.messagebox = messagebox
@@ -153,21 +185,27 @@ class SettingsDialog:
         win = tk.Toplevel(parent)
         self.win = win
         win.title("Ricoh-Drucker")
-        win.resizable(False, False)
         win.transient(parent)
         apply_theme(win)
         frm = ttk.Frame(win, padding=16)
         frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text="IP der IM 350F (Raw 9100), nicht die Ubuntu-Adresse:").grid(row=0, column=0, columnspan=3, sticky="w")
+        frm.columnconfigure(1, weight=1)
+        hint = ttk.Label(
+            frm,
+            text="IP der IM 350F (Raw 9100), nicht die Ubuntu-Adresse:",
+            wraplength=420,
+            justify="left",
+        )
+        hint.grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(frm, text="IP").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        self.host = ttk.Entry(frm, width=22)
+        self.host = ttk.Entry(frm, width=28)
         self.host.grid(row=1, column=1, columnspan=2, sticky="we", pady=(8, 0), padx=(8, 0))
         self.host.insert(0, settings.printer_host)
         ttk.Label(frm, text="Port").grid(row=2, column=0, sticky="w", pady=(8, 0))
         self.port = ttk.Entry(frm, width=8)
         self.port.grid(row=2, column=1, sticky="w", pady=(8, 0), padx=(8, 0))
         self.port.insert(0, str(settings.printer_port))
-        self.status = ttk.Label(frm, text="", style="Muted.TLabel")
+        self.status = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=420, justify="left")
         self.status.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.save_dump = tk.BooleanVar(master=win, value=bool(settings.save_debug_dump))
         ttk.Checkbutton(
@@ -182,6 +220,9 @@ class SettingsDialog:
         button(btns, text="Verbindung prüfen", command=self.test).pack(side="left", padx=(0, 8))
         button(btns, text="Abbrechen", command=win.destroy).pack(side="left", padx=4)
         button(btns, text="Speichern", command=self.save, variant="primary").pack(side="left", padx=4)
+        _bind_wraplength(hint, win)
+        _bind_wraplength(self.status, win)
+        _fit_window(win, min_width=520, min_height=260, width=560, height=280)
         win.grab_set()
         self.host.focus_set()
 
@@ -234,23 +275,45 @@ class DirectorySettingsDialog:
         win = tk.Toplevel(parent)
         self.win = win
         win.title("Adressbuch-Quelle")
-        win.geometry("560x520")
-        win.minsize(520, 480)
-        win.resizable(False, False)
         win.transient(parent)
         apply_theme(win)
 
-        frm = ttk.Frame(win, padding=16)
-        frm.pack(fill="both", expand=True)
+        shell = ttk.Frame(win, padding=16)
+        shell.pack(fill="both", expand=True)
+        shell.rowconfigure(0, weight=1)
+        shell.columnconfigure(0, weight=1)
+
+        # Scrollable body so action buttons stay reachable on small displays.
+        body_host = ttk.Frame(shell)
+        body_host.grid(row=0, column=0, sticky="nsew")
+        body_host.rowconfigure(0, weight=1)
+        body_host.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(body_host, highlightthickness=0, bd=0, bg=win.cget("bg"))
+        yscroll = ttk.Scrollbar(body_host, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=yscroll.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+
+        frm = ttk.Frame(canvas)
+        frm_id = canvas.create_window((0, 0), window=frm, anchor="nw")
+
+        def _sync_scroll(_event: Any = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(frm_id, width=canvas.winfo_width())
+
+        frm.bind("<Configure>", _sync_scroll)
+        canvas.bind("<Configure>", _sync_scroll)
 
         ttk.Label(frm, text="Adressbuch-Quelle", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
+        intro = ttk.Label(
             frm,
             text="Lokal speichern oder gemeinsames Verzeichnis (NovaMail LDAP/CardDAV, Standard-LDAP).",
             style="Muted.TLabel",
-            wraplength=500,
+            wraplength=560,
             justify="left",
-        ).pack(anchor="w", pady=(4, 12))
+        )
+        intro.pack(anchor="w", pady=(4, 12))
 
         self.mode = tk.StringVar(master=win, value=self.book.mode())
         mode_row = ttk.Frame(frm)
@@ -277,7 +340,7 @@ class DirectorySettingsDialog:
         preset.pack(fill="x")
         ttk.Label(preset, text="NovaMail-Host (LAN-IP)").pack(side="left")
         self.novamail_host = ttk.Entry(preset, width=22)
-        self.novamail_host.pack(side="left", padx=(8, 0))
+        self.novamail_host.pack(side="left", fill="x", expand=True, padx=(8, 8))
         # Prefill host from ldap URL if present
         url = str(ldap.get("url") or "")
         host_guess = ""
@@ -301,7 +364,7 @@ class DirectorySettingsDialog:
         grid.pack(fill="x")
         grid.columnconfigure(1, weight=1)
 
-        def row(label: str, r: int, width: int = 36) -> Any:
+        def row(label: str, r: int, width: int = 40) -> Any:
             ttk.Label(grid, text=label).grid(row=r, column=0, sticky="w", pady=3)
             entry = ttk.Entry(grid, width=width)
             entry.grid(row=r, column=1, sticky="ew", pady=3, padx=(8, 0))
@@ -324,16 +387,19 @@ class DirectorySettingsDialog:
         self.vcard_user = row("CardDAV-User", 5)
         self.vcard_user.insert(0, str(vcard.get("username") or "novamail"))
 
-        self.status = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=500, justify="left")
+        self.status = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=560, justify="left")
         self.status.pack(anchor="w", pady=(10, 0))
 
-        btns = ttk.Frame(frm)
-        btns.pack(fill="x", pady=(12, 0))
+        btns = ttk.Frame(shell)
+        btns.grid(row=1, column=0, sticky="ew", pady=(12, 0))
         button(btns, text="Verbindung prüfen", command=self.test).pack(side="left")
         button(btns, text="Abbrechen", command=win.destroy).pack(side="right")
         button(btns, text="Speichern", command=self.save, variant="primary").pack(side="right", padx=(0, 8))
 
+        _bind_wraplength(intro, win, pad=56)
+        _bind_wraplength(self.status, win, pad=56)
         self._sync_mode()
+        _fit_window(win, min_width=640, min_height=560, width=720, height=680)
         win.grab_set()
 
     def _sync_mode(self) -> None:
@@ -466,8 +532,6 @@ class PhonebookDialog:
         win = tk.Toplevel(parent)
         self.win = win
         win.title("Telefonbuch")
-        win.geometry("780x520")
-        win.minsize(640, 420)
         win.transient(parent)
         win.bind("<Escape>", lambda _e: win.destroy())
         apply_theme(win)
@@ -520,17 +584,22 @@ class PhonebookDialog:
 
         btns = ttk.Frame(root)
         btns.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        button(btns, text="Neuer Eintrag", command=self.add_entry).pack(side="left")
-        button(btns, text="Speichern…", command=self.save_selected).pack(side="left", padx=(8, 0))
-        button(btns, text="Favorit", command=self.toggle_favorite).pack(side="left", padx=(8, 0))
-        button(btns, text="Löschen", command=self.delete_selected).pack(side="left", padx=(8, 0))
-        button(btns, text="Quelle…", command=self.open_directory_settings).pack(side="left", padx=(8, 0))
-        button(btns, text="Schließen", command=win.destroy).pack(side="right")
-        button(btns, text="Übernehmen", command=self.apply, variant="primary").pack(side="right", padx=(0, 8))
+        left = ttk.Frame(btns)
+        left.pack(side="left", fill="x", expand=True)
+        right = ttk.Frame(btns)
+        right.pack(side="right")
+        button(left, text="Neuer Eintrag", command=self.add_entry).pack(side="left")
+        button(left, text="Speichern", command=self.save_selected).pack(side="left", padx=(8, 0))
+        button(left, text="Favorit", command=self.toggle_favorite).pack(side="left", padx=(8, 0))
+        button(left, text="Löschen", command=self.delete_selected).pack(side="left", padx=(8, 0))
+        button(left, text="Adressbuch-Quelle", command=self.open_directory_settings).pack(side="left", padx=(8, 0))
+        button(right, text="Schließen", command=win.destroy).pack(side="right")
+        button(right, text="Übernehmen", command=self.apply, variant="primary").pack(side="right", padx=(0, 8))
 
         for key, btn in radios:
             btn.configure(command=lambda k=key: self._set_filter(k))
         self._set_filter("all")
+        _fit_window(win, min_width=820, min_height=480, width=900, height=580)
         self.search.focus_set()
 
     def _query(self) -> str:
@@ -1568,7 +1637,6 @@ def run_settings_app() -> int:
 
     root = tk.Tk()
     root.title("Ricoh LAN-Fax")
-    root.resizable(False, False)
     apply_theme(root)
 
     frm = ttk.Frame(root, padding=20)
@@ -1577,13 +1645,14 @@ def run_settings_app() -> int:
     settings = load_settings()
     target = ttk.Label(frm, text=f"Ziel: {settings.display_target()}", style="Title.TLabel")
     target.pack(anchor="w")
-    ttk.Label(
+    intro = ttk.Label(
         frm,
         text="IP und Telefonbuch ohne Druckauftrag — Faxen weiter über den Drucker „Ricoh-LAN-Fax“.",
         style="Muted.TLabel",
         wraplength=420,
         justify="left",
-    ).pack(anchor="w", pady=(6, 16))
+    )
+    intro.pack(anchor="w", pady=(6, 16))
 
     def refresh_target(_settings: Settings | None = None) -> None:
         del _settings
@@ -1598,13 +1667,16 @@ def run_settings_app() -> int:
     def open_phonebook() -> None:
         PhonebookDialog(tk, ttk, messagebox, root, lambda _numbers: None)
 
-    btns = ttk.Frame(frm)
-    btns.pack(fill="x")
-    button(btns, text="Drucker-IP / Port…", command=open_ip, variant="primary").pack(side="left")
-    button(btns, text="Adressbuch-Quelle…", command=open_directory).pack(side="left", padx=(8, 0))
-    button(btns, text="Telefonbuch…", command=open_phonebook).pack(side="left", padx=(8, 0))
-    button(btns, text="Schließen", command=root.destroy).pack(side="right")
+    # Full-width stacked actions so labels never clip to "…".
+    actions = ttk.Frame(frm)
+    actions.pack(fill="x")
+    button(actions, text="Drucker-IP / Port", command=open_ip, variant="primary").pack(fill="x")
+    button(actions, text="Adressbuch-Quelle", command=open_directory).pack(fill="x", pady=(10, 0))
+    button(actions, text="Telefonbuch", command=open_phonebook).pack(fill="x", pady=(10, 0))
+    button(actions, text="Schließen", command=root.destroy).pack(fill="x", pady=(16, 0))
 
+    _bind_wraplength(intro, root, pad=40)
+    _fit_window(root, min_width=420, min_height=320, width=480, height=360)
     root.protocol("WM_DELETE_WINDOW", root.destroy)
     # Open IP dialog immediately so the menu entry feels like “the settings popup”.
     root.after(50, open_ip)
