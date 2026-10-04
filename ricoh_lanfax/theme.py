@@ -231,11 +231,13 @@ class RoundedButton:
         )
         self._canvas = self.widget
         self._items: list[int] = []
+        self._min_width = width
         self._redraw()
         self.widget.bind("<Enter>", self._enter)
         self.widget.bind("<Leave>", self._leave)
         self.widget.bind("<ButtonPress-1>", self._down)
         self.widget.bind("<ButtonRelease-1>", self._up)
+        self.widget.bind("<Configure>", self._on_configure)
 
     def pack(self, **kw: Any) -> Any:
         return self.widget.pack(**kw)
@@ -278,12 +280,22 @@ class RoundedButton:
             return CHIP_HOVER, TEXT
         return CHIP, TEXT
 
+    def _on_configure(self, event: Any) -> None:
+        # Grow with pack(fill="x") / stretched grid cells so labels are never clipped.
+        try:
+            new_w = max(self._min_width, int(event.width))
+        except Exception:  # noqa: BLE001
+            return
+        if new_w != int(self.widget.cget("width")):
+            self.widget.configure(width=new_w)
+            self._redraw()
+
     def _redraw(self) -> None:
         c = self.widget
         for item in self._items:
             c.delete(item)
         self._items.clear()
-        w = int(c.cget("width"))
+        w = max(self._min_width, int(c.cget("width")))
         h = int(c.cget("height"))
         fill, fg = self._colors()
         radius = h // 2 if self._compact else 12
