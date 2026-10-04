@@ -51,6 +51,41 @@ def novamail_defaults(host: str, password: str = "", username: str = NOVAMAIL_US
     }
 
 
+def _ldap_endpoint(host: str, port: int | None, use_ssl: bool) -> tuple[str, int]:
+    resolved = int(port) if port else (636 if use_ssl else 389)
+    return host, resolved
+
+
+def _format_ldap_connect_error(host: str, port: int, exc: BaseException) -> str:
+    """Turn socket/ldap3 failures into actionable German guidance."""
+    text = str(exc) or repr(exc)
+    lower = text.casefold()
+    errno_110 = "110" in text or "timed out" in lower or "timeout" in lower
+    errno_111 = "111" in text or "connection refused" in lower
+    errno_113 = "113" in text or "no route" in lower
+    target = f"{host}:{port}"
+    if errno_110:
+        hint = (
+            f"LDAP-Timeout: {target} antwortet nicht.\n\n"
+            "Bitte prüfen:\n"
+            f"• NovaMail läuft im Server-Modus (gemeinsames Adressbuch)\n"
+            f"• LAN-IP des NovaMail-PCs ist korrekt\n"
+            f"• Port {port} ist erreichbar (Firewall / gleiches Netz)\n"
+            f"• Für NovaMail muss die URL Port {NOVAMAIL_LDAP_PORT} nutzen "
+            f"(ldap://IP:{NOVAMAIL_LDAP_PORT})"
+        )
+        return hint
+    if errno_111:
+        return (
+            f"LDAP-Verbindung abgelehnt: {target}.\n\n"
+            "Dienst läuft dort vermutlich nicht — in NovaMail Server-Modus "
+            f"aktivieren und Port {NOVAMAIL_LDAP_PORT} prüfen."
+        )
+    if errno_113:
+        return f"Kein Netzwerkweg zu {target}. IP und VPN/LAN prüfen."
+    return f"LDAP-Verbindung zu {target} fehlgeschlagen: {text}"
+
+
 def _attr_values(entry_attrs: dict[str, Any], name: str) -> list[str]:
     for key, value in entry_attrs.items():
         if key.lower() == name.lower():
@@ -145,10 +180,10 @@ def fetch_ldap_contacts(
 
     parsed = parse_uri(uri)
     host = parsed.get("host") or ""
-    port = parsed.get("port")
     use_ssl = bool(parsed.get("ssl"))
     if not host:
         raise ValueError(f"Ungültige LDAP-URL: {uri}")
+    host, port = _ldap_endpoint(host, parsed.get("port"), use_ssl)
     # NONE + connect_timeout: avoid long hangs on unreachable hosts (get_info=ALL
     # would additionally fetch schema and freeze the Tk UI for a long time).
     server = Server(host, port=port, use_ssl=use_ssl, get_info=NONE, connect_timeout=5)
@@ -164,9 +199,9 @@ def fetch_ldap_contacts(
             auto_referrals=False,
         )
     except LDAPException as exc:
-        raise RuntimeError(f"LDAP-Verbindung zu {host}:{port or ('636' if use_ssl else '389')} fehlgeschlagen: {exc}") from exc
+        raise RuntimeError(_format_ldap_connect_error(host, port, exc)) from exc
     except OSError as exc:
-        raise RuntimeError(f"LDAP-Host {host} nicht erreichbar: {exc}") from exc
+        raise RuntimeError(_format_ldap_connect_error(host, port, exc)) from exc
     try:
         try:
             ok = conn.search(

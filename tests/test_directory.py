@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 from ricoh_lanfax.directory import (
     NOVAMAIL_BASE_DN,
     NOVAMAIL_BIND_DN,
+    _format_ldap_connect_error,
     novamail_defaults,
     parse_vcard_text,
     fetch_vcard_contacts,
@@ -52,6 +53,13 @@ class NovaMailDefaultsTests(unittest.TestCase):
         self.assertEqual(cfg["ldap"]["bind_dn"], NOVAMAIL_BIND_DN)
         self.assertTrue(cfg["ldap"]["enabled"])
         self.assertIn("addressbooks/novamail", cfg["vcard"]["path"])
+
+    def test_timeout_error_is_actionable(self) -> None:
+        msg = _format_ldap_connect_error("10.0.0.5", 1389, OSError(110, "Connection timed out"))
+        self.assertIn("LDAP-Timeout", msg)
+        self.assertIn("10.0.0.5:1389", msg)
+        self.assertIn("Server-Modus", msg)
+        self.assertIn("1389", msg)
 
 
 class VcardParseTests(unittest.TestCase):
