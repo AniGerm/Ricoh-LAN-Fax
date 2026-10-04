@@ -630,7 +630,7 @@ class PhonebookDialog:
         ttk: Any,
         messagebox: Any,
         parent: Any,
-        on_pick: Callable[[list[str]], None],
+        on_pick: Callable[[list[tuple[str, str]]], None],
     ) -> None:
         self.tk = tk
         self.ttk = ttk
@@ -841,7 +841,7 @@ class PhonebookDialog:
                 else [(1.0, c) for c in self.book.favorites(remote=remote)]
             )
             for _score, contact in hits:
-                extra = "★" if contact.source == "local" else f"★  {contact.source}"
+                extra = self._row_extra(contact)
                 iid = f"c-{contact.id}"
                 rows.append((iid, contact.label(), contact.number, extra))
                 self._rows[iid] = ("contact", contact)
@@ -852,7 +852,7 @@ class PhonebookDialog:
                 else [(1.0, c) for c in self.book.named_sorted(remote=remote)]
             )
             for _score, contact in hits:
-                extra = "★" if contact.favorite else ("" if contact.source == "local" else contact.source)
+                extra = self._row_extra(contact)
                 iid = f"c-{contact.id}"
                 rows.append((iid, contact.label(), contact.number, extra))
                 self._rows[iid] = ("contact", contact)
@@ -866,6 +866,15 @@ class PhonebookDialog:
         notes = self.book.source_notes()
         extra = ("  ·  " + " ".join(notes)) if notes else ""
         self.status.config(text=f"{hint}  ·  {len(rows)} Einträge{extra}")
+
+    @staticmethod
+    def _row_extra(contact: Contact) -> str:
+        """Keep source label (ldap/vcard) visible even when starred as local favorite."""
+        if contact.source == "local":
+            return "★" if contact.favorite else ""
+        if contact.favorite:
+            return f"★  {contact.source}"
+        return contact.source
 
     def _ask_contact(
         self,
@@ -1040,15 +1049,25 @@ class PhonebookDialog:
             if children:
                 self.tree.selection_set(children[0])
                 selected = self._selected()
-        numbers: list[str] = []
-        for _kind, item in selected:
+        picks: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for kind, item in selected:
             num = compact_number(item.number)
-            if num and num not in numbers:
-                numbers.append(num)
-        if not numbers:
+            if not num or num in seen:
+                continue
+            name = ""
+            if kind == "contact" and isinstance(item, Contact):
+                name = item.name.strip()
+            elif kind == "recent" and isinstance(item, Recent):
+                linked = self.book.lookup_number(num)
+                if linked is not None:
+                    name = linked.name.strip()
+            picks.append((num, name))
+            seen.add(num)
+        if not picks:
             self.messagebox.showinfo("Telefonbuch", "Bitte einen Eintrag auswählen.", parent=self.win)
             return
-        self.on_pick(numbers)
+        self.on_pick(picks)
         self.win.destroy()
 
 
@@ -1285,8 +1304,8 @@ class FaxPopup:
         except Exception as exc:  # noqa: BLE001
             self.messagebox.showerror("Telefonbuch", str(exc), parent=self.win)
 
-    def _apply_phonebook_numbers(self, numbers: list[str]) -> None:
-        self._add_recipients(numbers)
+    def _apply_phonebook_numbers(self, picks: list[tuple[str, str]]) -> None:
+        self._add_recipients(picks)
 
     def _redraw_recipients(self) -> None:
         for iid in self.recipients.get_children():
@@ -1294,16 +1313,24 @@ class FaxPopup:
         for number, name in self._recipients:
             self.recipients.insert("", "end", iid=number, values=(number, name or "—", "✕"))
 
-    def _add_recipients(self, numbers: list[str]) -> None:
+    def _add_recipients(self, entries: list[str] | list[tuple[str, str]]) -> None:
         have = {item[0] for item in self._recipients}
         book = load_book()
         added = False
-        for raw in numbers:
-            compact = compact_number(raw)
+        for entry in entries:
+            if isinstance(entry, tuple):
+                raw, given_name = entry[0], (entry[1] if len(entry) > 1 else "")
+            else:
+                raw, given_name = entry, ""
+            compact = compact_number(str(raw))
             if not compact or compact in have:
                 continue
-            contact = book.lookup_number(compact)
-            self._recipients.append((compact, contact.name if contact else ""))
+            name = str(given_name or "").strip()
+            if not name:
+                # Local contacts resolve immediately; LDAP names come from phonebook picks.
+                contact = next((c for c in book.contacts if c.compact() == compact), None)
+                name = contact.name if contact else ""
+            self._recipients.append((compact, name))
             have.add(compact)
             added = True
         if added:
@@ -1887,7 +1914,7 @@ def run_settings_app() -> int:
 
     def open_phonebook() -> None:
         try:
-            PhonebookDialog(tk, ttk, messagebox, root, lambda _numbers: None)
+            PhonebookDialog(tk, ttk, messagebox, root, lambda _picks: None)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Telefonbuch", str(exc), parent=root)
 

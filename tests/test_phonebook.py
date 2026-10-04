@@ -132,6 +132,16 @@ class BookTests(unittest.TestCase):
             loaded = load_book(path)
             self.assertEqual(loaded.favorite_numbers, ["030111"])
 
+    def test_row_extra_keeps_ldap_label_with_star(self) -> None:
+        from ricoh_lanfax.gui import PhonebookDialog
+
+        local = Contact(id="1", name="A", number="1", favorite=True, source="local")
+        ldap = Contact(id="2", name="B", number="2", favorite=True, source="ldap")
+        ldap_plain = Contact(id="3", name="C", number="3", favorite=False, source="ldap")
+        self.assertEqual(PhonebookDialog._row_extra(local), "★")
+        self.assertEqual(PhonebookDialog._row_extra(ldap), "★  ldap")
+        self.assertEqual(PhonebookDialog._row_extra(ldap_plain), "ldap")
+
     def test_ldap_source_writable_when_bound(self) -> None:
         cfg = {
             "mode": "directory",
