@@ -39,7 +39,7 @@ Do **not** double-click / `apt install` the `.deb` straight from `~/Downloads` �
 ```bash
 # download both files from the GitHub Release into ~/Downloads, then:
 chmod +x install-deb.sh
-sudo ./install-deb.sh ~/Downloads/ricoh-lanfax_0.3.3_all.deb
+sudo ./install-deb.sh ~/Downloads/ricoh-lanfax_0.4.0_all.deb
 ```
 
 Or, if `install-deb.sh` sits next to the `.deb` / finds it in `~/Downloads`:
@@ -102,6 +102,10 @@ For [NovaMail](https://github.com/AniGerm/NovaMail) on the main PC (**Server / s
 3. Keep **LDAP** enabled (port **1389**, base `ou=people,dc=novamail`, bind `cn=novamail,dc=novamail`)  
 4. Optionally enable CardDAV/vCard (`http://<host>:8765/addressbooks/novamail/`)  
 5. **Verbindung prüfen** → **Speichern**
+
+In directory mode, **Neuer Eintrag** writes the contact to NovaMail LDAP (not only offline).
+**Favoriten** stay local on this PC (`favorite_numbers` in `phonebook.json`) and are not pushed to LDAP.
+The phonebook polls LDAP about every 5 seconds while open so new shared contacts appear quickly.
 
 Fax numbers prefer `facsimileTelephoneNumber` / `TEL;TYPE=FAX`, then voice numbers.
 

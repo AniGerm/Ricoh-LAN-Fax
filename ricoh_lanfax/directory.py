@@ -136,56 +136,29 @@ def _pick_fax_numbers(entry_attrs: dict[str, Any], number_attrs: list[str]) -> l
     return ordered
 
 
-def fetch_ldap_contacts(
-    *,
-    url: str,
-    base_dn: str,
-    bind_dn: str = "",
-    bind_password: str = "",
-    search_filter: str = NOVAMAIL_LDAP_FILTER,
-    name_attr: str = NOVAMAIL_NAME_ATTR,
-    number_attrs: list[str] | None = None,
-) -> list:
-    """Search an LDAP directory and map inetOrgPerson entries to fax contacts."""
-    from .phonebook import Contact
-
+def _ldap3():
     try:
         from ldap3 import NONE, SUBTREE, Connection, Server
         from ldap3.core.exceptions import LDAPException
         from ldap3.utils.uri import parse_uri
     except ImportError as exc:
-        raise RuntimeError(
-            "python3-ldap3 fehlt. sudo apt install python3-ldap3"
-        ) from exc
+        raise RuntimeError("python3-ldap3 fehlt. sudo apt install python3-ldap3") from exc
+    return NONE, SUBTREE, Connection, Server, LDAPException, parse_uri
 
+
+def _open_ldap_connection(*, url: str, bind_dn: str = "", bind_password: str = ""):
+    """Return (connection, host, port, LDAPException). Caller must unbind."""
+    NONE, _SUBTREE, Connection, Server, LDAPException, parse_uri = _ldap3()
     uri = (url or "").strip()
     if not uri:
         raise ValueError("LDAP-URL fehlt")
-    base = (base_dn or "").strip()
-    if not base:
-        raise ValueError("LDAP base DN fehlt")
-    attrs = list(number_attrs or NOVAMAIL_NUMBER_ATTRS)
-    want = list(
-        dict.fromkeys(
-            [
-                name_attr,
-                "cn",
-                "displayName",
-                "givenName",
-                "sn",
-                *attrs,
-            ]
-        )
-    )
-
     parsed = parse_uri(uri)
     host = parsed.get("host") or ""
     use_ssl = bool(parsed.get("ssl"))
     if not host:
         raise ValueError(f"Ungültige LDAP-URL: {uri}")
     host, port = _ldap_endpoint(host, parsed.get("port"), use_ssl)
-    # NONE + connect_timeout: avoid long hangs on unreachable hosts (get_info=ALL
-    # would additionally fetch schema and freeze the Tk UI for a long time).
+    # NONE + connect_timeout: avoid long hangs on unreachable hosts.
     server = Server(host, port=port, use_ssl=use_ssl, get_info=NONE, connect_timeout=5)
     user = (bind_dn or "").strip() or None
     password = bind_password or ""
@@ -202,6 +175,65 @@ def fetch_ldap_contacts(
         raise RuntimeError(_format_ldap_connect_error(host, port, exc)) from exc
     except OSError as exc:
         raise RuntimeError(_format_ldap_connect_error(host, port, exc)) from exc
+    return conn, host, port, LDAPException
+
+
+def _split_cn_sn(name: str) -> tuple[str, str]:
+    title = name.strip()
+    if not title:
+        raise ValueError("Bitte einen Namen angeben")
+    parts = title.rsplit(None, 1)
+    if len(parts) == 2:
+        return title, parts[1]
+    return title, title
+
+
+def _contact_from_ldap_dn(dn: str, name: str, number: str):
+    from .phonebook import Contact
+
+    return Contact(
+        id=f"ldap-{uuid.uuid5(uuid.NAMESPACE_URL, f'{dn}|{number}').hex[:12]}",
+        name=name.strip(),
+        number=number,
+        favorite=False,
+        source="ldap",
+        notes=dn,
+    )
+
+
+def fetch_ldap_contacts(
+    *,
+    url: str,
+    base_dn: str,
+    bind_dn: str = "",
+    bind_password: str = "",
+    search_filter: str = NOVAMAIL_LDAP_FILTER,
+    name_attr: str = NOVAMAIL_NAME_ATTR,
+    number_attrs: list[str] | None = None,
+) -> list:
+    """Search an LDAP directory and map inetOrgPerson entries to fax contacts."""
+    from .phonebook import Contact
+
+    _NONE, SUBTREE, _Connection, _Server, _LDAPExc, _parse_uri = _ldap3()
+    base = (base_dn or "").strip()
+    if not base:
+        raise ValueError("LDAP base DN fehlt")
+    attrs = list(number_attrs or NOVAMAIL_NUMBER_ATTRS)
+    want = list(
+        dict.fromkeys(
+            [
+                name_attr,
+                "cn",
+                "displayName",
+                "givenName",
+                "sn",
+                *attrs,
+            ]
+        )
+    )
+    conn, _host, _port, LDAPException = _open_ldap_connection(
+        url=url, bind_dn=bind_dn, bind_password=bind_password
+    )
     try:
         try:
             ok = conn.search(
@@ -237,6 +269,112 @@ def fetch_ldap_contacts(
                     )
                 )
         return contacts
+    finally:
+        try:
+            conn.unbind()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def add_ldap_contact(
+    *,
+    url: str,
+    base_dn: str,
+    bind_dn: str = "",
+    bind_password: str = "",
+    name: str,
+    number: str,
+) -> Any:
+    """Create an inetOrgPerson on the LDAP server (NovaMail ADD). Favorites stay local."""
+    from .config import parse_numbers
+    from .phonebook import compact_number, digits_only
+
+    base = (base_dn or "").strip()
+    if not base:
+        raise ValueError("LDAP base DN fehlt")
+    title, sn = _split_cn_sn(name)
+    parsed = parse_numbers(number)
+    if not parsed:
+        raise ValueError("Keine gültige Faxnummer")
+    compact = compact_number(parsed[0])
+    if not digits_only(compact):
+        raise ValueError(f"Ungültige Nummer: {number!r}")
+
+    conn, _host, _port, LDAPException = _open_ldap_connection(
+        url=url, bind_dn=bind_dn, bind_password=bind_password
+    )
+    try:
+        uid = str(uuid.uuid4())
+        dn = f"uid={uid},{base}"
+        attributes = {
+            "objectClass": ["top", "person", "organizationalPerson", "inetOrgPerson"],
+            "cn": title,
+            "sn": sn,
+            "uid": uid,
+            "facsimileTelephoneNumber": compact,
+            "telephoneNumber": compact,
+        }
+        try:
+            ok = conn.add(dn, attributes=attributes)
+        except LDAPException as exc:
+            raise RuntimeError(f"LDAP-Anlage fehlgeschlagen: {exc}") from exc
+        result = conn.result or {}
+        if not ok or result.get("result") not in (0, None):
+            desc = result.get("description") or result.get("message") or result
+            raise RuntimeError(f"LDAP-Anlage fehlgeschlagen: {desc}")
+        return _contact_from_ldap_dn(dn, title, compact)
+    finally:
+        try:
+            conn.unbind()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def modify_ldap_contact(
+    *,
+    url: str,
+    bind_dn: str = "",
+    bind_password: str = "",
+    dn: str,
+    name: str,
+    number: str,
+) -> Any:
+    """Update cn/sn/fax on an existing LDAP entry."""
+    from ldap3 import MODIFY_REPLACE
+
+    from .config import parse_numbers
+    from .phonebook import compact_number, digits_only
+
+    entry_dn = (dn or "").strip()
+    if not entry_dn:
+        raise ValueError("LDAP-DN fehlt")
+    title, sn = _split_cn_sn(name)
+    parsed = parse_numbers(number)
+    if not parsed:
+        raise ValueError("Keine gültige Faxnummer")
+    compact = compact_number(parsed[0])
+    if not digits_only(compact):
+        raise ValueError(f"Ungültige Nummer: {number!r}")
+
+    conn, _host, _port, LDAPException = _open_ldap_connection(
+        url=url, bind_dn=bind_dn, bind_password=bind_password
+    )
+    try:
+        changes = {
+            "cn": [(MODIFY_REPLACE, [title])],
+            "sn": [(MODIFY_REPLACE, [sn])],
+            "facsimileTelephoneNumber": [(MODIFY_REPLACE, [compact])],
+            "telephoneNumber": [(MODIFY_REPLACE, [compact])],
+        }
+        try:
+            ok = conn.modify(entry_dn, changes)
+        except LDAPException as exc:
+            raise RuntimeError(f"LDAP-Änderung fehlgeschlagen: {exc}") from exc
+        result = conn.result or {}
+        if not ok or result.get("result") not in (0, None):
+            desc = result.get("description") or result.get("message") or result
+            raise RuntimeError(f"LDAP-Änderung fehlgeschlagen: {desc}")
+        return _contact_from_ldap_dn(entry_dn, title, compact)
     finally:
         try:
             conn.unbind()
@@ -483,6 +621,9 @@ class LdapSource:
     _cache: list | None = field(default=None, repr=False, compare=False)
     _error: str = field(default="", repr=False, compare=False)
 
+    def invalidate(self) -> None:
+        self._cache = None
+
     def list_contacts(self) -> list:
         if not self.enabled:
             return []
@@ -503,6 +644,42 @@ class LdapSource:
             self._cache = []
             self._error = str(exc)
         return list(self._cache)
+
+    def refresh(self) -> list:
+        self.invalidate()
+        return self.list_contacts()
+
+    def add_contact(self, name: str, number: str):
+        if not self.enabled:
+            raise RuntimeError("LDAP ist nicht aktiv")
+        if not self.writable:
+            raise RuntimeError("LDAP ist schreibgeschützt (Bind-DN/Passwort prüfen)")
+        contact = add_ldap_contact(
+            url=self.url,
+            base_dn=self.base_dn,
+            bind_dn=self.bind_dn,
+            bind_password=self.bind_password,
+            name=name,
+            number=number,
+        )
+        self.invalidate()
+        return contact
+
+    def update_contact(self, dn: str, name: str, number: str):
+        if not self.enabled:
+            raise RuntimeError("LDAP ist nicht aktiv")
+        if not self.writable:
+            raise RuntimeError("LDAP ist schreibgeschützt (Bind-DN/Passwort prüfen)")
+        contact = modify_ldap_contact(
+            url=self.url,
+            bind_dn=self.bind_dn,
+            bind_password=self.bind_password,
+            dn=dn,
+            name=name,
+            number=number,
+        )
+        self.invalidate()
+        return contact
 
     def search(self, query: str) -> list:
         from .phonebook import fuzzy_score
