@@ -107,6 +107,48 @@ class BookTests(unittest.TestCase):
             self.assertIn("ldap", loaded.sources_config)
             self.assertFalse(loaded.sources_config["ldap"]["enabled"])
 
+    def test_remote_favorite_markers_are_local_only(self) -> None:
+        from ricoh_lanfax.directory import LdapSource
+
+        ldap = LdapSource(enabled=True, writable=True, url="ldap://x", base_dn="ou=people,dc=novamail", bind_dn="cn=novamail,dc=novamail")
+        ldap._cache = [
+            Contact(id="ldap-a", name="Remote", number="030111", source="ldap", notes="uid=a,ou=people,dc=novamail"),
+        ]
+        book = AddressBook(
+            sources_config={
+                "mode": "directory",
+                "ldap": {**DEFAULT_SOURCES["ldap"], "enabled": True, "url": "ldap://x", "base_dn": "ou=people,dc=novamail", "bind_dn": "cn=x"},
+                "vcard": dict(DEFAULT_SOURCES["vcard"]),
+            },
+            extra_sources=[ldap],
+        )
+        self.assertFalse(book.directory()[0].favorite)
+        book.set_contact_favorite(book.directory()[0], True)
+        self.assertEqual(book.favorite_numbers, ["030111"])
+        self.assertTrue(book.directory()[0].favorite)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "phonebook.json"
+            save_book(book, path)
+            loaded = load_book(path)
+            self.assertEqual(loaded.favorite_numbers, ["030111"])
+
+    def test_ldap_source_writable_when_bound(self) -> None:
+        cfg = {
+            "mode": "directory",
+            "ldap": {
+                **DEFAULT_SOURCES["ldap"],
+                "enabled": True,
+                "url": "ldap://192.168.1.10:1389",
+                "bind_dn": "cn=novamail,dc=novamail",
+                "bind_password": "secret",
+                "base_dn": "ou=people,dc=novamail",
+            },
+            "vcard": dict(DEFAULT_SOURCES["vcard"]),
+        }
+        ldap = build_extra_sources(cfg)[0]
+        self.assertTrue(ldap.enabled)
+        self.assertTrue(ldap.writable)
+
 
 if __name__ == "__main__":
     unittest.main()

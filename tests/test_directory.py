@@ -13,6 +13,7 @@ from ricoh_lanfax.directory import (
     NOVAMAIL_BASE_DN,
     NOVAMAIL_BIND_DN,
     _format_ldap_connect_error,
+    _split_cn_sn,
     novamail_defaults,
     parse_vcard_text,
     fetch_vcard_contacts,
@@ -60,6 +61,10 @@ class NovaMailDefaultsTests(unittest.TestCase):
         self.assertIn("10.0.0.5:1389", msg)
         self.assertIn("Server-Modus", msg)
         self.assertIn("1389", msg)
+
+    def test_split_cn_sn(self) -> None:
+        self.assertEqual(_split_cn_sn("Anna Müller"), ("Anna Müller", "Müller"))
+        self.assertEqual(_split_cn_sn("Clinic"), ("Clinic", "Clinic"))
 
 
 class VcardParseTests(unittest.TestCase):

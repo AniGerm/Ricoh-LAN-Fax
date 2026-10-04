@@ -146,12 +146,16 @@ def build_extra_sources(config: dict[str, Any]) -> list[AddressBookSource]:
     ldap_cfg = dict(DEFAULT_SOURCES["ldap"])
     ldap_cfg.update(config.get("ldap") or {})
     ldap_enabled = directory_on and bool(ldap_cfg.get("enabled"))
+    bind_dn = str(ldap_cfg.get("bind_dn") or "").strip()
+    bind_password = str(ldap_cfg.get("bind_password") or "")
     extra.append(
         LdapSource(
             enabled=ldap_enabled,
+            # NovaMail (and most hubs) allow ADD/MODIFY for the configured bind account.
+            writable=bool(ldap_enabled and bind_dn),
             url=str(ldap_cfg.get("url") or ""),
-            bind_dn=str(ldap_cfg.get("bind_dn") or ""),
-            bind_password=str(ldap_cfg.get("bind_password") or ""),
+            bind_dn=bind_dn,
+            bind_password=bind_password,
             base_dn=str(ldap_cfg.get("base_dn") or ""),
             filter=str(ldap_cfg.get("filter") or DEFAULT_SOURCES["ldap"]["filter"]),
             name_attr=str(ldap_cfg.get("name_attr") or "cn"),
@@ -212,14 +216,38 @@ def fuzzy_score(query: str, name: str, number: str) -> float:
 class AddressBook:
     contacts: list[Contact] = field(default_factory=list)
     recents: list[Recent] = field(default_factory=list)
+    # Local-only favorite markers for LDAP/vCard numbers (never written to the directory).
+    favorite_numbers: list[str] = field(default_factory=list)
     sources_config: dict[str, Any] = field(default_factory=lambda: json.loads(json.dumps(DEFAULT_SOURCES)))
     extra_sources: list[AddressBookSource] = field(default_factory=list)
 
     def mode(self) -> str:
         return addressbook_mode(self.sources_config)
 
+    def favorite_number_set(self) -> set[str]:
+        return {compact_number(n) for n in self.favorite_numbers if compact_number(n)}
+
+    def set_favorite_number(self, number: str, favorite: bool) -> None:
+        key = compact_number(number)
+        if not key:
+            return
+        have = self.favorite_number_set()
+        if favorite:
+            have.add(key)
+        else:
+            have.discard(key)
+        self.favorite_numbers = sorted(have)
+
+    def ldap_source(self) -> Any | None:
+        for src in self.extra_sources:
+            if getattr(src, "source_id", "") == "ldap" and getattr(src, "enabled", False):
+                return src
+        return None
+
     def directory(self, *, remote: bool = True) -> list[Contact]:
-        # Local mode: only local contacts. Directory mode: LDAP/vCard (+ keep local favorites).
+        # Local mode: only local contacts. Directory mode: LDAP/vCard + local overlays.
+        # Favorites for remote numbers are applied from favorite_numbers (local only).
+        fav_remote = self.favorite_number_set()
         if self.mode() == MODE_LOCAL or not remote:
             return list(self.contacts)
         found: list[Contact] = list(self.contacts)
@@ -235,6 +263,8 @@ class AddressBook:
                 if key in seen:
                     continue
                 seen.add(key)
+                if key in fav_remote and not contact.favorite:
+                    contact = replace(contact, favorite=True)
                 found.append(contact)
         return found
 
@@ -253,7 +283,7 @@ class AddressBook:
                 return contact
         return None
 
-    def warmup_remote(self) -> None:
+    def warmup_remote(self, *, force: bool = False) -> None:
         """Fetch LDAP/vCard into source caches (safe to call from a worker thread)."""
         if self.mode() != MODE_DIRECTORY:
             return
@@ -261,9 +291,29 @@ class AddressBook:
             if not getattr(src, "enabled", False):
                 continue
             try:
-                src.list_contacts()
+                if force and hasattr(src, "refresh"):
+                    src.refresh()
+                elif force and hasattr(src, "invalidate"):
+                    src.invalidate()
+                    src.list_contacts()
+                else:
+                    src.list_contacts()
             except Exception:  # noqa: BLE001
                 pass
+
+    def save_directory_contact(self, name: str, number: str, *, favorite: bool = False, dn: str = "") -> Contact:
+        """Create or update a contact on LDAP; favorites stay in favorite_numbers only."""
+        src = self.ldap_source()
+        if src is None or not getattr(src, "writable", False):
+            raise RuntimeError(
+                "Kein schreibbares LDAP. Verzeichnismodus mit NovaMail-Bind-DN/Passwort prüfen."
+            )
+        if dn.strip():
+            contact = src.update_contact(dn.strip(), name, number)
+        else:
+            contact = src.add_contact(name, number)
+        self.set_favorite_number(contact.number, bool(favorite))
+        return replace(contact, favorite=bool(favorite))
 
     def search(self, query: str, *, favorite_only: bool = False, remote: bool = True) -> list[tuple[float, Contact]]:
         q = query.strip()
@@ -366,6 +416,14 @@ class AddressBook:
                 self.contacts[i] = updated
                 return updated
         return None
+
+    def set_contact_favorite(self, contact: Contact, favorite: bool) -> Contact:
+        """Toggle favorite; LDAP/vCard markers stay local (favorite_numbers)."""
+        if contact.source == "local":
+            updated = self.set_favorite(contact.id, favorite)
+            return updated or replace(contact, favorite=bool(favorite))
+        self.set_favorite_number(contact.number, bool(favorite))
+        return replace(contact, favorite=bool(favorite))
 
     def delete_local(self, contact_id: str) -> bool:
         before = len(self.contacts)
@@ -490,9 +548,20 @@ def load_book(path: Path | None = None) -> AddressBook:
                 continue
             recents.append(Recent(number=key, used_at="", count=1))
             seen_nums.add(key)
+    favorite_numbers: list[str] = []
+    seen_fav: set[str] = set()
+    for item in data.get("favorite_numbers") or []:
+        key = compact_number(str(item or ""))
+        if not key or key in seen_fav:
+            continue
+        seen_fav.add(key)
+        favorite_numbers.append(key)
+    # Migrate: local favorite flags already cover local contacts; keep remote-only
+    # markers from any previous local duplicates that pointed at LDAP numbers.
     return AddressBook(
         contacts=contacts,
         recents=recents[:RECENT_LIMIT],
+        favorite_numbers=favorite_numbers,
         sources_config=sources_config,
         extra_sources=build_extra_sources(sources_config),
     )
@@ -505,6 +574,7 @@ def save_book(book: AddressBook, path: Path | None = None) -> None:
         "version": 1,
         "contacts": [asdict(c) for c in book.contacts],
         "recents": [asdict(r) for r in book.recents],
+        "favorite_numbers": list(book.favorite_numbers),
         "sources": book.sources_config,
     }
     book_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

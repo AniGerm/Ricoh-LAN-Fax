@@ -712,6 +712,8 @@ class PhonebookDialog:
         self._filter = "all"
         self._filter_var.set("all")
         self._remote_ready = self.book.mode() != MODE_DIRECTORY
+        self._poll_job = ""
+        self._poll_busy = False
         _fit_window(win, min_width=820, min_height=480, width=900, height=580)
         # Paint locals immediately; LDAP/vCard loads in the background so the
         # window always appears instead of freezing on a bad directory host.
@@ -720,14 +722,16 @@ class PhonebookDialog:
         if not self._remote_ready:
             self.status.config(text="Verzeichnis wird geladen …")
             self._warmup_remote_async()
+        else:
+            self._schedule_directory_poll()
 
-    def _warmup_remote_async(self) -> None:
+    def _warmup_remote_async(self, *, force: bool = False) -> None:
         book = self.book
         result: dict[str, Any] = {"done": False}
 
         def worker() -> None:
             try:
-                book.warmup_remote()
+                book.warmup_remote(force=force)
             finally:
                 result["done"] = True
 
@@ -739,12 +743,40 @@ class PhonebookDialog:
                 return
             if result["done"]:
                 self._remote_ready = True
+                self._poll_busy = False
                 self.refresh()
+                self._schedule_directory_poll()
                 return
             self.win.after(50, poll)
 
+        self._poll_busy = True
         threading.Thread(target=worker, daemon=True).start()
         self.win.after(50, poll)
+
+    def _schedule_directory_poll(self) -> None:
+        if self._poll_job:
+            try:
+                self.win.after_cancel(self._poll_job)
+            except Exception:  # noqa: BLE001
+                pass
+            self._poll_job = ""
+        if self.book.mode() != MODE_DIRECTORY:
+            return
+        self._poll_job = self.win.after(5000, self._directory_poll_tick)
+
+    def _directory_poll_tick(self) -> None:
+        self._poll_job = ""
+        try:
+            if not self.win.winfo_exists():
+                return
+        except Exception:  # noqa: BLE001
+            return
+        if self.book.mode() != MODE_DIRECTORY:
+            return
+        if not self._poll_busy:
+            self._warmup_remote_async(force=True)
+        else:
+            self._schedule_directory_poll()
 
     def _query(self) -> str:
         return self.search.get().strip()
@@ -769,7 +801,9 @@ class PhonebookDialog:
             self.refresh()
             if not self._remote_ready:
                 self.status.config(text="Verzeichnis wird geladen …")
-                self._warmup_remote_async()
+                self._warmup_remote_async(force=True)
+            else:
+                self._schedule_directory_poll()
 
         DirectorySettingsDialog(self.tk, self.ttk, self.messagebox, self.win, on_save=after)
 
@@ -885,20 +919,36 @@ class PhonebookDialog:
             return None
         return str(result.get("name") or ""), str(result.get("number") or ""), bool(result.get("favorite"))
 
-    def _commit_contact(self, number: str, name: str, favorite: bool) -> None:
+    def _commit_contact(self, number: str, name: str, favorite: bool, *, dn: str = "") -> None:
+        wrote_remote = False
         try:
-            contact = self.book.save_named(number, name, favorite=favorite)
+            ldap = self.book.ldap_source()
+            if self.book.mode() == MODE_DIRECTORY and ldap is not None and getattr(ldap, "writable", False):
+                contact = self.book.save_directory_contact(name, number, favorite=favorite, dn=dn)
+                wrote_remote = True
+            else:
+                contact = self.book.save_named(number, name, favorite=favorite)
             save_book(self.book)
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
+            self.messagebox.showerror("Telefonbuch", str(exc), parent=self.win)
+            return
+        except Exception as exc:  # noqa: BLE001
             self.messagebox.showerror("Telefonbuch", str(exc), parent=self.win)
             return
         self.search.delete(0, "end")
-        self._set_filter("all")
-        iid = f"c-{contact.id}"
-        if self.tree.exists(iid):
-            self.tree.selection_set(iid)
-            self.tree.focus(iid)
-            self.tree.see(iid)
+        self._filter = "all"
+        self._filter_var.set("all")
+        if wrote_remote:
+            self.status.config(text="Auf LDAP gespeichert — Verzeichnis wird aktualisiert …")
+            self._warmup_remote_async(force=True)
+        else:
+            self.refresh()
+            iid = f"c-{contact.id}"
+            if self.tree.exists(iid):
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                self.tree.see(iid)
+            self._schedule_directory_poll()
 
     def add_entry(self) -> None:
         asked = self._ask_contact(title="Neuer Eintrag")
@@ -916,22 +966,31 @@ class PhonebookDialog:
         number = item.number
         name = ""
         favorite = False
+        dn = ""
         if kind == "contact" and isinstance(item, Contact):
-            if item.source != "local":
-                self.messagebox.showinfo("Telefonbuch", "LDAP/vCard-Einträge sind schreibgeschützt.", parent=self.win)
+            if item.source == "vcard":
+                self.messagebox.showinfo(
+                    "Telefonbuch",
+                    "vCard/CardDAV-Einträge können hier nicht geändert werden.",
+                    parent=self.win,
+                )
                 return
             name = item.name
             favorite = item.favorite
+            if item.source == "ldap":
+                dn = item.notes or ""
         elif kind == "recent" and isinstance(item, Recent):
             linked = self.book.lookup_number(item.number)
             if linked is not None:
                 name = linked.name
                 favorite = linked.favorite
+                if linked.source == "ldap":
+                    dn = linked.notes or ""
         asked = self._ask_contact(title="Eintrag speichern", number=number, name=name, favorite=favorite)
         if asked is None:
             return
         new_name, new_number, fav = asked
-        self._commit_contact(new_number, new_name, fav)
+        self._commit_contact(new_number, new_name, fav, dn=dn)
 
     def toggle_favorite(self) -> None:
         rows = self._selected()
@@ -950,10 +1009,7 @@ class PhonebookDialog:
                 parent=self.win,
             )
             return
-        if contact.source != "local":
-            self.messagebox.showinfo("Telefonbuch", "LDAP/vCard-Einträge sind schreibgeschützt.", parent=self.win)
-            return
-        self.book.set_favorite(contact.id, not contact.favorite)
+        self.book.set_contact_favorite(contact, not contact.favorite)
         save_book(self.book)
         self.refresh()
 
@@ -965,7 +1021,9 @@ class PhonebookDialog:
         if kind != "contact" or not isinstance(item, Contact) or item.source != "local":
             self.messagebox.showinfo(
                 "Telefonbuch",
-                "Nur lokal gespeicherte Adressen können gelöscht werden.",
+                "Löschen auf dem LDAP-Server ist hier nicht vorgesehen — "
+                "nur lokale Adressen können entfernt werden. Favoriten-Markierung "
+                "für LDAP-Einträge mit „Favorit“ umschalten.",
                 parent=self.win,
             )
             return
