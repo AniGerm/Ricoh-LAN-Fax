@@ -115,7 +115,8 @@ def fetch_ldap_contacts(
     from .phonebook import Contact
 
     try:
-        from ldap3 import ALL, SUBTREE, Connection, Server
+        from ldap3 import NONE, SUBTREE, Connection, Server
+        from ldap3.core.exceptions import LDAPException
         from ldap3.utils.uri import parse_uri
     except ImportError as exc:
         raise RuntimeError(
@@ -148,17 +149,34 @@ def fetch_ldap_contacts(
     use_ssl = bool(parsed.get("ssl"))
     if not host:
         raise ValueError(f"Ungültige LDAP-URL: {uri}")
-    server = Server(host, port=port, use_ssl=use_ssl, get_info=ALL)
+    # NONE + connect_timeout: avoid long hangs on unreachable hosts (get_info=ALL
+    # would additionally fetch schema and freeze the Tk UI for a long time).
+    server = Server(host, port=port, use_ssl=use_ssl, get_info=NONE, connect_timeout=5)
     user = (bind_dn or "").strip() or None
     password = bind_password or ""
-    conn = Connection(server, user=user, password=password, auto_bind=True, receive_timeout=12)
     try:
-        ok = conn.search(
-            search_base=base,
-            search_filter=search_filter or NOVAMAIL_LDAP_FILTER,
-            search_scope=SUBTREE,
-            attributes=want,
+        conn = Connection(
+            server,
+            user=user,
+            password=password,
+            auto_bind=True,
+            receive_timeout=8,
+            auto_referrals=False,
         )
+    except LDAPException as exc:
+        raise RuntimeError(f"LDAP-Verbindung zu {host}:{port or ('636' if use_ssl else '389')} fehlgeschlagen: {exc}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"LDAP-Host {host} nicht erreichbar: {exc}") from exc
+    try:
+        try:
+            ok = conn.search(
+                search_base=base,
+                search_filter=search_filter or NOVAMAIL_LDAP_FILTER,
+                search_scope=SUBTREE,
+                attributes=want,
+            )
+        except LDAPException as exc:
+            raise RuntimeError(f"LDAP-Suche fehlgeschlagen: {exc}") from exc
         if not ok and conn.result.get("result") not in (0, None):
             raise RuntimeError(f"LDAP-Suche fehlgeschlagen: {conn.result}")
         contacts = []

@@ -178,6 +178,91 @@ def _bind_wraplength(label: Any, win: Any, *, pad: int = 48) -> None:
     win.after_idle(_on_configure)
 
 
+def _run_connection_test(
+    win: Any,
+    *,
+    messagebox: Any,
+    title: str,
+    work: Callable[[], str],
+    status_label: Any | None = None,
+    test_button: Any | None = None,
+) -> None:
+    """Run a connection probe off the UI thread; always show an info/error dialog."""
+    if getattr(win, "_ricoh_test_busy", False):
+        return
+    setattr(win, "_ricoh_test_busy", True)
+    if test_button is not None:
+        try:
+            test_button.config(state="disabled")
+        except Exception:  # noqa: BLE001
+            pass
+    if status_label is not None:
+        try:
+            status_label.config(text="Verbindung wird geprüft …")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        win.update_idletasks()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Tk is not thread-safe: never call win.after() from the worker.
+    # Poll a result box from the main loop instead.
+    result: dict[str, Any] = {"done": False, "ok": False, "msg": ""}
+
+    def worker() -> None:
+        try:
+            result["msg"] = work()
+            result["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            result["msg"] = str(exc) or repr(exc)
+            result["ok"] = False
+        result["done"] = True
+
+    def finish() -> None:
+        setattr(win, "_ricoh_test_busy", False)
+        if test_button is not None:
+            try:
+                test_button.config(state="normal")
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            if not win.winfo_exists():
+                return
+        except Exception:  # noqa: BLE001
+            return
+        msg = str(result.get("msg") or "")
+        ok = bool(result.get("ok"))
+        if status_label is not None:
+            try:
+                status_label.config(text=msg if ok else f"Fehler: {msg}")
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            if ok:
+                messagebox.showinfo(title, msg, parent=win)
+            else:
+                messagebox.showerror(title, msg, parent=win)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def poll() -> None:
+        try:
+            if not win.winfo_exists():
+                setattr(win, "_ricoh_test_busy", False)
+                return
+        except Exception:  # noqa: BLE001
+            setattr(win, "_ricoh_test_busy", False)
+            return
+        if result["done"]:
+            finish()
+            return
+        win.after(50, poll)
+
+    threading.Thread(target=worker, daemon=True).start()
+    win.after(50, poll)
+
+
 class SettingsDialog:
     def __init__(self, tk: Any, ttk: Any, messagebox: Any, parent: Any, settings: Settings, on_save: Callable[[Settings], None]) -> None:
         self.messagebox = messagebox
@@ -217,13 +302,13 @@ class SettingsDialog:
         ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         btns = ttk.Frame(frm)
         btns.grid(row=5, column=0, columnspan=3, sticky="e", pady=(12, 0))
-        button(btns, text="Verbindung prüfen", command=self.test).pack(side="left", padx=(0, 8))
+        self.test_btn = button(btns, text="Verbindung prüfen", command=self.test)
+        self.test_btn.pack(side="left", padx=(0, 8))
         button(btns, text="Abbrechen", command=win.destroy).pack(side="left", padx=4)
         button(btns, text="Speichern", command=self.save, variant="primary").pack(side="left", padx=4)
         _bind_wraplength(hint, win)
         _bind_wraplength(self.status, win)
         _fit_window(win, min_width=520, min_height=260, width=560, height=280)
-        win.grab_set()
         self.host.focus_set()
 
     def _read(self) -> Settings:
@@ -239,14 +324,25 @@ class SettingsDialog:
         return current
 
     def test(self) -> None:
-        try:
-            from .send import probe_printer
+        from .send import probe_printer
 
-            s = self._read()
-            msg = probe_printer(s.printer_host, s.printer_port)
-            self.status.config(text=msg)
-        except Exception as exc:  # noqa: BLE001
-            self.status.config(text=str(exc))
+        try:
+            settings = self._read()
+        except ValueError as exc:
+            self.messagebox.showerror("Verbindung", str(exc), parent=self.win)
+            return
+
+        def work() -> str:
+            return probe_printer(settings.printer_host, settings.printer_port)
+
+        _run_connection_test(
+            self.win,
+            messagebox=self.messagebox,
+            title="Drucker-Verbindung",
+            work=work,
+            status_label=self.status,
+            test_button=self.test_btn,
+        )
 
     def save(self) -> None:
         try:
@@ -387,12 +483,15 @@ class DirectorySettingsDialog:
         self.vcard_user = row("CardDAV-User", 5)
         self.vcard_user.insert(0, str(vcard.get("username") or "novamail"))
 
-        self.status = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=560, justify="left")
-        self.status.pack(anchor="w", pady=(10, 0))
-
-        btns = ttk.Frame(shell)
-        btns.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        button(btns, text="Verbindung prüfen", command=self.test).pack(side="left")
+        # Status + buttons stay outside the scroll area so feedback is always visible.
+        footer = ttk.Frame(shell)
+        footer.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        self.status = ttk.Label(footer, text="", style="Muted.TLabel", wraplength=560, justify="left")
+        self.status.pack(anchor="w")
+        btns = ttk.Frame(footer)
+        btns.pack(fill="x", pady=(8, 0))
+        self.test_btn = button(btns, text="Verbindung prüfen", command=self.test)
+        self.test_btn.pack(side="left")
         button(btns, text="Abbrechen", command=win.destroy).pack(side="right")
         button(btns, text="Speichern", command=self.save, variant="primary").pack(side="right", padx=(0, 8))
 
@@ -400,7 +499,6 @@ class DirectorySettingsDialog:
         _bind_wraplength(self.status, win, pad=56)
         self._sync_mode()
         _fit_window(win, min_width=640, min_height=560, width=720, height=680)
-        win.grab_set()
 
     def _sync_mode(self) -> None:
         state = "normal" if self.mode.get() == MODE_DIRECTORY else "disabled"
@@ -467,10 +565,18 @@ class DirectorySettingsDialog:
 
         cfg = self._collect()
         if cfg["mode"] != MODE_DIRECTORY:
-            self.status.config(text="Lokaler Modus — kein Verzeichnis-Test nötig.")
+            msg = "Lokaler Modus — kein Verzeichnis-Test nötig."
+            self.status.config(text=msg)
+            self.messagebox.showinfo("Verbindung", msg, parent=self.win)
             return
-        messages: list[str] = []
-        try:
+        if not cfg["ldap"]["enabled"] and not cfg["vcard"]["enabled"]:
+            msg = "Bitte LDAP und/oder vCard aktivieren."
+            self.status.config(text=msg)
+            self.messagebox.showerror("Verbindung", msg, parent=self.win)
+            return
+
+        def work() -> str:
+            messages: list[str] = []
             if cfg["ldap"]["enabled"]:
                 messages.append(
                     probe_ldap(
@@ -489,11 +595,16 @@ class DirectorySettingsDialog:
                         password=cfg["vcard"]["password"],
                     )
                 )
-            if not messages:
-                messages.append("Bitte LDAP und/oder vCard aktivieren.")
-            self.status.config(text=" · ".join(messages))
-        except Exception as exc:  # noqa: BLE001
-            self.status.config(text=f"Fehler: {exc}")
+            return " · ".join(messages)
+
+        _run_connection_test(
+            self.win,
+            messagebox=self.messagebox,
+            title="Verzeichnis-Verbindung",
+            work=work,
+            status_label=self.status,
+            test_button=self.test_btn,
+        )
 
     def save(self) -> None:
         cfg = self._collect()
@@ -598,9 +709,42 @@ class PhonebookDialog:
 
         for key, btn in radios:
             btn.configure(command=lambda k=key: self._set_filter(k))
-        self._set_filter("all")
+        self._filter = "all"
+        self._filter_var.set("all")
+        self._remote_ready = self.book.mode() != MODE_DIRECTORY
         _fit_window(win, min_width=820, min_height=480, width=900, height=580)
+        # Paint locals immediately; LDAP/vCard loads in the background so the
+        # window always appears instead of freezing on a bad directory host.
+        self.refresh()
         self.search.focus_set()
+        if not self._remote_ready:
+            self.status.config(text="Verzeichnis wird geladen …")
+            self._warmup_remote_async()
+
+    def _warmup_remote_async(self) -> None:
+        book = self.book
+        result: dict[str, Any] = {"done": False}
+
+        def worker() -> None:
+            try:
+                book.warmup_remote()
+            finally:
+                result["done"] = True
+
+        def poll() -> None:
+            try:
+                if not self.win.winfo_exists():
+                    return
+            except Exception:  # noqa: BLE001
+                return
+            if result["done"]:
+                self._remote_ready = True
+                self.refresh()
+                return
+            self.win.after(50, poll)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.win.after(50, poll)
 
     def _query(self) -> str:
         return self.search.get().strip()
@@ -621,7 +765,11 @@ class PhonebookDialog:
     def open_directory_settings(self) -> None:
         def after() -> None:
             self.book = load_book()
+            self._remote_ready = self.book.mode() != MODE_DIRECTORY
             self.refresh()
+            if not self._remote_ready:
+                self.status.config(text="Verzeichnis wird geladen …")
+                self._warmup_remote_async()
 
         DirectorySettingsDialog(self.tk, self.ttk, self.messagebox, self.win, on_save=after)
 
@@ -638,6 +786,7 @@ class PhonebookDialog:
             return
         self._search_job = ""
         query = self._query()
+        remote = bool(getattr(self, "_remote_ready", True))
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         self._rows.clear()
@@ -652,14 +801,22 @@ class PhonebookDialog:
                 rows.append((iid, name, recent.number, extra))
                 self._rows[iid] = ("recent", recent)
         elif self._filter == "favorite":
-            hits = self.book.search(query, favorite_only=True) if query else [(1.0, c) for c in self.book.favorites()]
+            hits = (
+                self.book.search(query, favorite_only=True, remote=remote)
+                if query
+                else [(1.0, c) for c in self.book.favorites(remote=remote)]
+            )
             for _score, contact in hits:
                 extra = "★" if contact.source == "local" else f"★  {contact.source}"
                 iid = f"c-{contact.id}"
                 rows.append((iid, contact.label(), contact.number, extra))
                 self._rows[iid] = ("contact", contact)
         else:
-            hits = self.book.search(query) if query else [(1.0, c) for c in self.book.named_sorted()]
+            hits = (
+                self.book.search(query, remote=remote)
+                if query
+                else [(1.0, c) for c in self.book.named_sorted(remote=remote)]
+            )
             for _score, contact in hits:
                 extra = "★" if contact.favorite else ("" if contact.source == "local" else contact.source)
                 iid = f"c-{contact.id}"
@@ -1659,13 +1816,22 @@ def run_settings_app() -> int:
         target.config(text=f"Ziel: {load_settings().display_target()}")
 
     def open_ip() -> None:
-        SettingsDialog(tk, ttk, messagebox, root, load_settings(), refresh_target)
+        try:
+            SettingsDialog(tk, ttk, messagebox, root, load_settings(), refresh_target)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Drucker-IP", str(exc), parent=root)
 
     def open_directory() -> None:
-        DirectorySettingsDialog(tk, ttk, messagebox, root)
+        try:
+            DirectorySettingsDialog(tk, ttk, messagebox, root)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Adressbuch-Quelle", str(exc), parent=root)
 
     def open_phonebook() -> None:
-        PhonebookDialog(tk, ttk, messagebox, root, lambda _numbers: None)
+        try:
+            PhonebookDialog(tk, ttk, messagebox, root, lambda _numbers: None)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Telefonbuch", str(exc), parent=root)
 
     # Full-width stacked actions so labels never clip to "…".
     actions = ttk.Frame(frm)
@@ -1678,8 +1844,6 @@ def run_settings_app() -> int:
     _bind_wraplength(intro, root, pad=40)
     _fit_window(root, min_width=420, min_height=320, width=480, height=360)
     root.protocol("WM_DELETE_WINDOW", root.destroy)
-    # Open IP dialog immediately so the menu entry feels like “the settings popup”.
-    root.after(50, open_ip)
     root.mainloop()
     return 0
 

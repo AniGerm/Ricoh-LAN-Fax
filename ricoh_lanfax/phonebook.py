@@ -218,14 +218,17 @@ class AddressBook:
     def mode(self) -> str:
         return addressbook_mode(self.sources_config)
 
-    def directory(self) -> list[Contact]:
+    def directory(self, *, remote: bool = True) -> list[Contact]:
         # Local mode: only local contacts. Directory mode: LDAP/vCard (+ keep local favorites).
-        if self.mode() == MODE_LOCAL:
+        if self.mode() == MODE_LOCAL or not remote:
             return list(self.contacts)
         found: list[Contact] = list(self.contacts)
         seen = {c.compact() for c in found}
         for src in self.extra_sources:
             if not getattr(src, "enabled", False):
+                continue
+            # Skip remote sources that have not been warmed up yet (UI stays responsive).
+            if getattr(src, "_cache", None) is None and not getattr(src, "_error", ""):
                 continue
             for contact in src.list_contacts():
                 key = contact.compact()
@@ -235,13 +238,13 @@ class AddressBook:
                 found.append(contact)
         return found
 
-    def named_sorted(self) -> list[Contact]:
-        named = [c for c in self.directory() if c.name.strip()]
+    def named_sorted(self, *, remote: bool = True) -> list[Contact]:
+        named = [c for c in self.directory(remote=remote) if c.name.strip()]
         named.sort(key=lambda c: (sort_name_key(c.name), c.compact()))
         return named
 
-    def favorites(self) -> list[Contact]:
-        return [c for c in self.named_sorted() if c.favorite]
+    def favorites(self, *, remote: bool = True) -> list[Contact]:
+        return [c for c in self.named_sorted(remote=remote) if c.favorite]
 
     def lookup_number(self, number: str) -> Contact | None:
         key = compact_number(number)
@@ -250,25 +253,40 @@ class AddressBook:
                 return contact
         return None
 
-    def search(self, query: str, *, favorite_only: bool = False) -> list[tuple[float, Contact]]:
+    def warmup_remote(self) -> None:
+        """Fetch LDAP/vCard into source caches (safe to call from a worker thread)."""
+        if self.mode() != MODE_DIRECTORY:
+            return
+        for src in self.extra_sources:
+            if not getattr(src, "enabled", False):
+                continue
+            try:
+                src.list_contacts()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def search(self, query: str, *, favorite_only: bool = False, remote: bool = True) -> list[tuple[float, Contact]]:
         q = query.strip()
         rows: list[tuple[float, Contact]] = []
-        for contact in self.directory():
+        for contact in self.directory(remote=remote):
             if favorite_only and not contact.favorite:
                 continue
             score = fuzzy_score(q, contact.name, contact.number)
             if score >= SEARCH_FLOOR:
                 rows.append((score, contact))
-        for src in self.extra_sources:
-            if not getattr(src, "enabled", False):
-                continue
-            if q:
-                for contact in src.search(q):
-                    if favorite_only and not contact.favorite:
-                        continue
-                    if any(c.id == contact.id for _, c in rows):
-                        continue
-                    rows.append((max(fuzzy_score(q, contact.name, contact.number), 0.8), contact))
+        if remote:
+            for src in self.extra_sources:
+                if not getattr(src, "enabled", False):
+                    continue
+                if getattr(src, "_cache", None) is None and not getattr(src, "_error", ""):
+                    continue
+                if q:
+                    for contact in src.search(q):
+                        if favorite_only and not contact.favorite:
+                            continue
+                        if any(c.id == contact.id for _, c in rows):
+                            continue
+                        rows.append((max(fuzzy_score(q, contact.name, contact.number), 0.8), contact))
         rows.sort(key=lambda item: (-item[0], sort_name_key(item[1].name), item[1].compact()))
         return rows
 
@@ -355,8 +373,6 @@ class AddressBook:
         return len(self.contacts) < before
 
     def source_notes(self) -> list[str]:
-        from .directory import LdapSource, VcardSource
-
         notes: list[str] = []
         if self.mode() == MODE_LOCAL:
             notes.append("Lokales Adressbuch aktiv.")
@@ -367,14 +383,15 @@ class AddressBook:
             if not getattr(src, "enabled", False):
                 continue
             any_enabled = True
-            rows = src.list_contacts()
-            err = getattr(src, "last_error", lambda: "")()
+            err = getattr(src, "_error", "") or ""
+            cache = getattr(src, "_cache", None)
+            if cache is None and not err:
+                notes.append(f"{src.label}: wird geladen …")
+                continue
             if err:
                 notes.append(f"{src.label}: Fehler — {err}")
             else:
-                notes.append(f"{src.label}: {len(rows)} Einträge")
-            if isinstance(src, (LdapSource, VcardSource)):
-                pass
+                notes.append(f"{src.label}: {len(cache or [])} Einträge")
         if not any_enabled:
             notes.append("Kein LDAP/vCard aktiv — in den Einstellungen NovaMail/LDAP konfigurieren.")
         return notes

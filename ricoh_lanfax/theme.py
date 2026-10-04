@@ -232,6 +232,7 @@ class RoundedButton:
         self._canvas = self.widget
         self._items: list[int] = []
         self._min_width = width
+        self._sizing = False
         self._redraw()
         self.widget.bind("<Enter>", self._enter)
         self.widget.bind("<Leave>", self._leave)
@@ -282,21 +283,29 @@ class RoundedButton:
 
     def _on_configure(self, event: Any) -> None:
         # Grow with pack(fill="x") / stretched grid cells so labels are never clipped.
+        if self._sizing:
+            return
         try:
             new_w = max(self._min_width, int(event.width))
+            cur_w = int(float(self.widget.cget("width")))
         except Exception:  # noqa: BLE001
             return
-        if new_w != int(self.widget.cget("width")):
+        if abs(new_w - cur_w) < 2:
+            return
+        self._sizing = True
+        try:
             self.widget.configure(width=new_w)
             self._redraw()
+        finally:
+            self._sizing = False
 
     def _redraw(self) -> None:
         c = self.widget
         for item in self._items:
             c.delete(item)
         self._items.clear()
-        w = max(self._min_width, int(c.cget("width")))
-        h = int(c.cget("height"))
+        w = max(self._min_width, int(float(c.cget("width"))))
+        h = int(float(c.cget("height")))
         fill, fg = self._colors()
         radius = h // 2 if self._compact else 12
         self._items.extend(_round_fill(c, 1, 1, w - 1, h - 1, radius, fill))
@@ -310,7 +319,7 @@ class RoundedButton:
 
     def _leave(self, _event: Any) -> None:
         self._hover = False
-        self._pressed = False
+        # Keep _pressed across Leave so resize/redraw during a click still fires.
         self._redraw()
 
     def _down(self, _event: Any) -> None:
@@ -326,7 +335,12 @@ class RoundedButton:
         self._pressed = False
         self._redraw()
         if was and self._command:
-            self._command()
+            command = self._command
+            # Defer so Tk finishes the release event before opening dialogs.
+            try:
+                self.widget.after_idle(command)
+            except Exception:  # noqa: BLE001
+                command()
 
 
 def button(
