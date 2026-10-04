@@ -1,3 +1,3 @@
 """Linux LAN-Fax sender and CUPS popup for Ricoh IM 350F."""
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
