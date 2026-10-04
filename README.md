@@ -39,7 +39,7 @@ Do **not** double-click / `apt install` the `.deb` straight from `~/Downloads` â
 ```bash
 # download both files from the GitHub Release into ~/Downloads, then:
 chmod +x install-deb.sh
-sudo ./install-deb.sh ~/Downloads/ricoh-lanfax_0.3.1_all.deb
+sudo ./install-deb.sh ~/Downloads/ricoh-lanfax_0.3.2_all.deb
 ```
 
 Or, if `install-deb.sh` sits next to the `.deb` / finds it in `~/Downloads`:
